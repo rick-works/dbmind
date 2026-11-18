@@ -22,6 +22,12 @@ mod oracle;
 mod others;
 mod postgres;
 
+/// 金仓的目录 SQL 改名器（`pg_*` → `sys_*`）。
+///
+/// 只给「绕开 `DialectOps`、把 PG 语句写死在 `match kind` 里」的几处复用：
+/// 监控总览、容量排行、同步行数估算、比对外键定义。**绝不能用在用户 SQL 上**。
+pub(crate) use postgres::kb_catalog_sql;
+
 /// 一种方言族的全部「按库分支」能力。
 ///
 /// 默认实现取**最保守**的形态（没有原生 upsert、没有分页扩展、查询版本要用各家自己的
@@ -840,7 +846,12 @@ pub struct MySqlOps {
 }
 
 /// Doris：MySQL 协议，但**没有原生 upsert**（走两阶段），catalog 三级引用。
-pub struct DorisOps;
+pub struct DorisOps {
+    /// StarRocks 分叉后**没有 `mysql` 库**：用户/角色相关的 `mysql.user`、`mysql.role_edges`
+    /// 全部 `Unknown database 'mysql'`（真机实测，整条清单 500）。这类能力对它如实 Absent，
+    /// 其余（索引、表选项、DDL）与 Doris 同源，继续共用一份实现。
+    pub starrocks: bool,
+}
 
 /// ClickHouse：MySQL 协议但**没有标准 UPDATE**（只能 `ALTER TABLE … UPDATE`），
 /// 也没有原生 upsert / 行值比较。
@@ -899,7 +910,9 @@ pub struct GenericOps;
 static MYSQL: MySqlOps = MySqlOps { mariadb: false };
 /// MariaDB 与 MySQL 同族同 impl，只在用户管理那几条上分叉（见 `MySqlOps::mariadb`）。
 static MARIADB: MySqlOps = MySqlOps { mariadb: true };
-static DORIS: DorisOps = DorisOps;
+static DORIS: DorisOps = DorisOps { starrocks: false };
+/// StarRocks：元数据/DDL 与 Doris 同源，只有用户管理缺席（见 `DorisOps::starrocks`）。
+static STARROCKS: DorisOps = DorisOps { starrocks: true };
 static CLICKHOUSE: ClickHouseOps = ClickHouseOps;
 static POSTGRES: PostgresOps = PostgresOps;
 static KINGBASE: KingbaseOps = KingbaseOps;
@@ -922,7 +935,16 @@ static GENERIC: GenericOps = GenericOps;
 pub fn of(kind: ConnectionKind) -> &'static dyn DialectOps {
     match kind.dialect() {
         "MySQL" => match kind {
-            ConnectionKind::Doris | ConnectionKind::Starrocks => &DORIS,
+            // Doris 系：SelectDB 是 Doris 的商业版（元数据与 SQL 全同源），StarRocks 分叉后
+            // 元数据查询仍与 Doris 一样 —— 三家走同一份实现。
+            // **漏了 SelectDB 的代价是真的会坏**：落到 MySqlOps 后 `indexes` 用
+            // `group_concat(... order by seq_in_index separator ',')`（Doris 不认这个写法）、
+            // `users` 读 `mysql.user.super_priv`（Doris 表里没这列），两处都直接 500
+            //（2026-11-17 真机巡检实测）。
+            // StarRocks 单独一支：它没有 `mysql` 库，用户/角色那几条查询会整片 500
+            //（见 `DorisOps::starrocks`）；其余能力与 Doris 完全相同。
+            ConnectionKind::Starrocks => &STARROCKS,
+            ConnectionKind::Doris | ConnectionKind::Selectdb => &DORIS,
             ConnectionKind::Mariadb => &MARIADB,
             _ => &MYSQL,
         },
@@ -1051,11 +1073,15 @@ mod tests {
             .unwrap_or_default()
             .contains("system.columns"));
 
-        // PG 系走 pg_attribute + col_description
-        for kind in [ConnectionKind::Postgresql, ConnectionKind::Kingbase] {
-            let sql = sql_of(kind).unwrap_or_else(|| panic!("{kind:?} 应有列注释查询"));
-            assert!(sql.contains("pg_attribute"), "{kind:?}: {sql}");
-        }
+        // PG 走 pg_attribute + col_description
+        let pg_comments = sql_of(ConnectionKind::Postgresql)
+            .unwrap_or_else(|| panic!("Postgresql 应有列注释查询"));
+        assert!(pg_comments.contains("pg_attribute"), "{pg_comments}");
+        // 金仓的系统目录叫 sys_*：同一条 SQL 要**整条改写**过去，不能再带 pg_ 目录名
+        let kb_comments = sql_of(ConnectionKind::Kingbase)
+            .unwrap_or_else(|| panic!("Kingbase 应有列注释查询"));
+        assert!(kb_comments.contains("sys_attribute"), "{kb_comments}");
+        assert!(!kb_comments.contains("from pg_"), "{kb_comments}");
 
         // Oracle / 达梦：`comment` 是关键字，必须带双引号，否则 ORA-00923
         for kind in [ConnectionKind::Oracle, ConnectionKind::Dm] {
@@ -1116,7 +1142,11 @@ mod tests {
         let pg = sql_of(ConnectionKind::Postgresql);
         assert!(pg.contains("udt_name"), "{pg}");
         assert!(pg.contains("is_identity") && pg.contains("nextval"), "{pg}");
-        assert_eq!(sql_of(ConnectionKind::Kingbase), pg);
+        // 金仓只换目录名（``sys_class`` / ``sys_attribute``），类型文本与自增判定与 PG 一致
+        let kb = sql_of(ConnectionKind::Kingbase);
+        assert!(kb.contains("udt_name"), "{kb}");
+        assert!(kb.contains("is_identity") && kb.contains("nextval"), "{kb}");
+        assert!(!kb.contains("from pg_"), "{kb}");
 
         // Oracle 认 12c 标识列；达梦**故意不查** user_tab_identity_cols
         // （视图是否存在未验证，那句 SQL 一报错会连带丢掉类型与注释）
@@ -1375,10 +1405,11 @@ mod tests {
         // ---- schema 清单 ----
         let schemas = |kind: ConnectionKind| of(kind).schemas_sql().unwrap_or("");
         assert!(schemas(ConnectionKind::Postgresql).contains("has_schema_privilege"));
-        assert_eq!(
-            schemas(ConnectionKind::Kingbase),
-            schemas(ConnectionKind::Postgresql)
-        );
+        // 金仓的系统模式叫 `sys_catalog`，过滤条件也必须把 `sys_` 前缀滤掉
+        // （PG 那份只滤 `pg_`，照抄会把金仓自己的系统模式全列进树里）
+        let kb_schemas = schemas(ConnectionKind::Kingbase);
+        assert!(kb_schemas.contains("sys_catalog.sys_namespace"), "{kb_schemas}");
+        assert!(kb_schemas.contains("sys\\_%"), "{kb_schemas}");
         // 九个固定数据库角色的同名 schema 是噪音，必须滤掉
         assert!(schemas(ConnectionKind::Sqlserver).contains("db_denydatawriter"));
         assert!(schemas(ConnectionKind::Oracle).contains("all_objects"));
@@ -1392,7 +1423,11 @@ mod tests {
         let pg = tis(ConnectionKind::Postgresql);
         assert!(pg.contains("has_table_privilege"), "{pg}");
         assert!(pg.contains("'public'"), "{pg}");
-        assert_eq!(tis(ConnectionKind::Kingbase), pg);
+        // 金仓改走 sys_class / sys_namespace，权限函数名不变
+        let kb_tables = tis(ConnectionKind::Kingbase);
+        assert!(kb_tables.contains("sys_class"), "{kb_tables}");
+        assert!(!kb_tables.contains("from pg_"), "{kb_tables}");
+        assert!(kb_tables.contains("'public'"), "{kb_tables}");
         // SQL Server 的注释只能自己 join 扩展属性（mssql-jdbc 不填 REMARKS）
         let ms = tis(ConnectionKind::Sqlserver);
         assert!(ms.contains("MS_Description"), "{ms}");
@@ -1428,11 +1463,15 @@ mod tests {
             "{ora_some}"
         );
         assert!(sql_text(of(ConnectionKind::Oracle).procedures(None)).contains("user_objects"));
-        // DM 故意不吃 schema（字典大小写与 owner 过滤都没在真机验证过）
-        assert_eq!(
-            sql_text(of(ConnectionKind::Dm).procedures(Some("APP"))),
-            sql_text(of(ConnectionKind::Dm).procedures(None))
+        // DM 与 Oracle 同口径：带 schema 走 all_objects + owner，不带才退回 user_objects。
+        // （2026-11-18 真机核对过 `all_objects` + `upper(owner)` 可用；不吃 schema 的后果是
+        //  树上点 DEMO 列出 SYSDBA 名下的一堆系统过程，用户看到「这模式里怎么全是系统过程」）
+        let dm_some = sql_text(of(ConnectionKind::Dm).procedures(Some("APP")));
+        assert!(
+            dm_some.contains("all_objects") && dm_some.contains("upper('APP')"),
+            "{dm_some}"
         );
+        assert!(sql_text(of(ConnectionKind::Dm).procedures(None)).contains("user_objects"));
         assert!(sql_text(of(ConnectionKind::Db2).procedures(None)).contains("syscat.routines"));
         assert!(sql_text(of(ConnectionKind::Derby).procedures(None)).contains("sys.sysaliases"));
         assert!(sql_text(of(ConnectionKind::Sqlserver).procedures(None)).contains("sys.procedures"));
@@ -2196,15 +2235,25 @@ mod tests {
         assert!(pg_none.contains("nspname = current_schema()"), "{pg_none}");
         let pg_schema = sql(of(ConnectionKind::Postgresql).ddl("t1", Some("public")));
         assert!(pg_schema.contains("nspname = 'public'"), "{pg_schema}");
-        assert_eq!(sql(of(ConnectionKind::Kingbase).ddl("t1", None)), pg_none);
+        // 金仓同一份 DDL 拼装，目录/函数换成 sys_*（`sys_get_viewdef` / `sys_class`）
+        let kb_ddl = sql(of(ConnectionKind::Kingbase).ddl("t1", None));
+        assert!(kb_ddl.contains("sys_get_viewdef"), "{kb_ddl}");
+        assert!(kb_ddl.contains("from sys_class"), "{kb_ddl}");
+        assert!(!kb_ddl.contains("from pg_"), "{kb_ddl}");
         let ora_schema = sql(of(ConnectionKind::Oracle).ddl("t1", Some("hr")));
         assert!(ora_schema.contains("upper('hr')"), "{ora_schema}");
         assert!(ora_schema.contains("all_views"), "{ora_schema}");
         let ora_self = sql(of(ConnectionKind::Oracle).ddl("t1", None));
         assert!(ora_self.contains("user_views"), "{ora_self}");
         assert!(!ora_self.contains("all_views"), "{ora_self}");
+        // 达梦：`user_tab_columns` 只认会话当前模式，而达梦上 schema 切换不生效
+        //（真机：database=DEMO 时 current_schema 仍是 SYSDBA）⇒ 必须走 all_* + owner 探测
         let dm = sql(of(ConnectionKind::Dm).ddl("t1", None));
-        assert!(dm.contains("user_tab_columns"), "{dm}");
+        assert!(dm.contains("all_tab_columns"), "{dm}");
+        assert!(dm.contains("sys_context('USERENV','CURRENT_SCHEMA')"), "{dm}");
+        let dm_schema = sql(of(ConnectionKind::Dm).ddl("t1", Some("demo")));
+        assert!(dm_schema.contains("upper('demo')"), "{dm_schema}");
+        assert!(!dm_schema.contains("user_tab_columns"), "{dm_schema}");
         let sq = sql(of(ConnectionKind::Sqlite).ddl("t1", None));
         assert!(sq.contains("sqlite_master"), "{sq}");
         // 没实例可验证就不猜
@@ -2431,10 +2480,12 @@ mod tests {
             of(ConnectionKind::Postgresql).object_source("event", "v1", None),
             Meta::Absent
         ));
-        // Kingbase 与 PG 一字不差
-        assert_eq!(
-            sql(of(ConnectionKind::Kingbase).object_source("view", "v1", None)),
-            pg
+        // 金仓同一份实现，目录/函数换成 sys_*（含 `'pg_catalog'` 字面量 → `'sys_catalog'`）
+        let kb_view = sql(of(ConnectionKind::Kingbase).object_source("view", "v1", None));
+        assert!(kb_view.contains("sys_get_viewdef"), "{kb_view}");
+        assert!(
+            kb_view.contains("nspname not in ('sys_catalog','information_schema')"),
+            "{kb_view}"
         );
 
         // Oracle：三参 get_ddl 带 owner；不带模式时走会话默认模式
@@ -2447,9 +2498,12 @@ mod tests {
             of(ConnectionKind::Oracle).object_source("event", "v1", None),
             Meta::Absent
         ));
-        // DM：两参 get_ddl（三参没真机验证过）
-        let dm = sql(of(ConnectionKind::Dm).object_source("function", "v1", None));
-        assert!(dm.contains("get_ddl('FUNCTION', upper('v1'))"), "{dm}");
+        // DM：视图走两参 get_ddl（三参没真机验证过）；例程改走 all_source ——
+        // get_ddl 在只读会话里内部要建临时表，直接报 -6506「试图在只读事务中修改数据」
+        let dm_view = sql(of(ConnectionKind::Dm).object_source("view", "v1", None));
+        assert!(dm_view.contains("get_ddl('VIEW', upper('v1'))"), "{dm_view}");
+        let dm_fn = sql(of(ConnectionKind::Dm).object_source("function", "v1", None));
+        assert!(dm_fn.contains("from all_source"), "{dm_fn}");
         assert!(matches!(
             of(ConnectionKind::Dm).object_source("event", "v1", None),
             Meta::Absent

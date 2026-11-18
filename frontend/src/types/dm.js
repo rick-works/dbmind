@@ -12,6 +12,12 @@ export default {
   category: 'RELATIONAL',
   noSql: false,
   schemaLevel: 'none',
+  // 「库」这一层对达梦是噪音：与 Oracle 同一口径（见 types/index.js 的 hideDbLevelOf）——
+  // 达梦一个实例就是一个库，树上的第一层是**模式**（DEMO / SYS / SYSDBA…）。
+  // 不标这一位的话，连接节点展开后会走到「库」那条路：达梦的 `/databases` 没有库清单可列
+  // （连接串里的库名本身也可以不填），后端只能回占位名 `(default)`，树里就只剩一行
+  // 「未取到库清单」—— 用户看到的就是「达梦节点展不开」。
+  hideDbLevel: true,
   defaultSchema: '',
   quoteStyle: 'DOUBLE_QUOTE',
   logo: 'dm.svg',

@@ -22,8 +22,11 @@
 | 11 | Doris | `doris-fe1` / `fe2` / `fe3` | 9030 / 9031 / 9032（MySQL 协议）<br>8030 / 8031 / 8032（Web UI） | `root` | `Dbmind@123` | `demo` | 3 FE + 3 BE，任选一个 FE 连 |
 | 12 | TiDB | `lab-tidb` | **4000** | `root` | `Dbmind@123` | 库名可留空 | v8.5.1 单机（TiKV 内置），演示表 `demo.products`(5 行) |
 | 13 | openGauss | `lab-opengauss` | **5433** | `gaussdb` 或 `opengauss` | `Dbmind@123` | `postgres` / `demo` | 5.0.0，**5432 被 lab-postgresql 占用，故映射到 5433**；演示表 `demo.accounts`(4 行) |
-| 14 | StarRocks | `lab-starrocks`（**待装**） | 计划 **9034**（MySQL 协议，9030 已被 Doris 占用） | `root` | 留空 | `demo` | `starrocks/allin1-ubuntu` 镜像体积大、拉取受限，尚未部署 |
-| 15 | OceanBase | `lab-oceanbase`（**待装**） | 计划 **3881**（MySQL 协议） | `root` | `Dbmind@123` | `demo` | `oceanbase/oceanbase-ce` 拉取受限，尚未部署；需 ≥8G 内存 |
+| 14 | StarRocks | `dbmind-starrocks` | **19030**（MySQL 协议；**不是 9030**）<br>Web UI `18030` | `root` | **留空** | `demo_sr` / `dbmind_probe_sr` | `starrocks/allin1-ubuntu:3.1.13`；端口整体挪到 1xxxx 段避让 Doris |
+| 15 | OceanBase | `lab-oceanbase` | **3881**（MySQL 协议）<br>3882 = 2882 | **`root@sys`** | **留空** | `demo` | `oceanbase/oceanbase-ce:latest`；直连 observer 时**用户名要带租户** |
+| 16 | 瀚高 HighGo | `lab-highgo` | **5866** | `highgo` | `Dbmind@123` | `demo` | HighGo 6.0.1（PG 12.3 内核）；演示表 `users`(5 行)；试用版有效期至 2027-11-17 |
+| 17 | 人大金仓 KingbaseES | `lab-kingbase` | **54321** | `SYSTEM` | `Dbmind@123` | `demo` | V008R003C002B0320；演示表 `users`(5 行)；**系统目录是 `sys_*`，没有 `pg_catalog`** |
+| 18 | 达梦 DM8 | `lab-dameng` | **5236** | `SYSDBA`<br>（业务账号 `demo` / `Dbmind123`） | `Dbmind@123` | 无「库」概念，看**模式** `DEMO` | `DM Database Server 64 V8`（DB Version 0x7000c）；演示表 `DEMO.USERS`(5 行)；口令里带 `@`，shell 里要整体加引号 |
 
 补充说明：
 
@@ -36,11 +39,10 @@
 - **openGauss**：类型选 **openGauss**；端口 **5433**（**不是 5432**，5432 是实验室里的 PostgreSQL）。
   驱动必须用 `org.opengauss:opengauss-jdbc:5.0.0-og`（**带 `-og` 后缀**，Maven 上同号无后缀的是误传的 PG 副本）；
   URL 用 `jdbc:opengauss://host:port/db?sslmode=disable`，别带 `reWriteBatchedInserts` 这类 PG 参数（fork 不认）。
-- **StarRocks / OceanBase（待装）**：镜像拉取受限，暂未部署。装好后按计划端口接入：
-  StarRocks 用 **9034**（9030 是 Doris）、账号 `root`、口令留空；
-  OceanBase 用 **3881**、`root` / `Dbmind@123`（MySQL 模式）。
-  装之前先 `ss -tlnp | grep 9030` 确认端口没被占。
-- **KingbaseES**：实验室**暂未部署**（DBMind 已支持，接入方式同 PostgreSQL，驱动用官方 `kingbase8`）。
+- **StarRocks**：类型选 **StarRocks**；端口 **19030**（**9030 是 Doris**，别再记成 9034）；`root` / **口令留空**。
+- **OceanBase**：类型选 **OceanBase**；端口 **3881**；用户名必须写 **`root@sys`**（租户后缀），口令**留空**；
+  库里已有 `demo`。
+- **瀚高 / 金仓 / 达梦**：三个国产库见第七章（装法、坑、验证结论都在那里）。
 
 ## 二、数据目录 · 日志 · 重启
 
@@ -63,8 +65,11 @@
 | `doris-be1..3` | `…/doris/data/be1..3` | `docker logs doris-be1`；容器内 `/opt/apache-doris/be/log/be.INFO` | `docker restart doris-be1` |
 | `lab-tidb` | 无 bind mount（数据在容器层） | `docker logs lab-tidb` | `docker restart lab-tidb` |
 | `lab-opengauss` | 无 bind mount（数据在容器层，`/var/lib/opengauss/data`） | `docker logs lab-opengauss`；PG 日志在容器内 `/var/lib/opengauss/data/pg_log/` | `docker restart lab-opengauss` |
-| `lab-starrocks`（**待装**） | 装好后无 bind mount（数据在容器层） | `docker logs lab-starrocks`；FE/BE 日志在容器内 `/opt/starrocks/*/log/` | `docker restart lab-starrocks` |
-| `lab-oceanbase`（**待装**） | 装好后无 bind mount（数据在容器层） | `docker logs lab-oceanbase` | `docker restart lab-oceanbase` |
+| `dbmind-starrocks` | 无 bind mount（数据在容器层） | `docker logs dbmind-starrocks`；FE/BE 日志在容器内 `/opt/starrocks/*/log/` | `docker restart dbmind-starrocks` |
+| `lab-oceanbase` | 无 bind mount（数据在容器层） | `docker logs lab-oceanbase` | `docker restart lab-oceanbase` |
+| `lab-highgo` | `…/single/data/highgo`（容器内 `/opt/HighGo6.0.1-cluster/data`） | `docker logs lab-highgo`；服务端日志在容器内 `/opt/HighGo6.0.1-cluster/log/` | `docker restart lab-highgo` |
+| `lab-kingbase` | `…/single/data/kingbase`（容器内 `/data`） | `…/data/kingbase/sys_log/*.log`（容器 stdout 只有启动横幅） | `docker restart lab-kingbase` |
+| `lab-dameng` | `…/single/data/dameng`（容器内 `/opt/dmdbms/data`） | `docker logs lab-dameng`；DB 日志在容器内 `/opt/dmdbms/log/DMSERVER*.log` | `docker restart lab-dameng` |
 
 `…` = `/opt/dbmind-labs`。三套 compose 项目：
 
@@ -135,8 +140,12 @@ cd /opt/dbmind-labs/doris && docker compose down && rm -rf data && docker compos
 | openGauss 报 `08P01 通讯协定错误 / Session 初始化失败` | **端口连错了**（连到 5432 的 PostgreSQL 了）；openGauss 在 **5433**。另外驱动必须是 `…-og` 版本 |
 | openGauss 密码认证失败 | 用 `gaussdb` / `Dbmind@123`；服务端 `password_encryption_type=2`（sha256）时 `-og` 驱动才能过，**PG 官方驱动连不上** |
 | TiDB 连接被拒（Access denied） | 口令是 `Dbmind@123`（不是空）；端口 4000 |
-| StarRocks 报表不存在 | 端口 **9034**（9030 是 Doris）；先 `create database demo`；建表要带 `DISTRIBUTED BY HASH(...)` |
-| 端口冲突 | 5432 = PostgreSQL、9030 = Doris，所以 openGauss/StarRocks/OceanBase 分别映射到 **5433 / 9034 / 3881**；新容器映射前先 `ss -tlnp \| grep <port>` |
+| StarRocks 报表不存在 | 端口 **19030**（9030 是 Doris、18030 是 Web UI）；`root` 口令留空；建表要带 `DISTRIBUTED BY HASH(...)` |
+| OceanBase 报 Access denied（用 `root`） | 直连 observer 的用户名是 **`root@sys`**（租户后缀），口令留空 |
+| 金仓 `relation "pg_namespace" does not exist` | KingbaseES V8R3 的系统目录是 **`sys_catalog.sys_*`**，没有 `pg_catalog`；DBMind 当前按 PG 目录查，见第七章「未通过」说明 |
+| 金仓容器刚起就反复重启 | entrypoint 收尾 `tail -f /data/logfile`，而服务端日志被 `logging_collector` 收进 `/data/sys_log/`，logfile 不存在 → 容器退出。`touch /data/logfile` 后 `docker start` 即稳 |
+| 达梦 shell 里连不上（`SYSDBA/…@host`） | 口令 `Dbmind@123` 自带 `@`，disql 连接串要写成 `SYSDBA/'"Dbmind@123"'@localhost:5236` |
+| 端口冲突 | 5432 = PostgreSQL、9030 = Doris、5866 = HighGo、54321 = KingbaseES、5236 = DM；openGauss/OceanBase/StarRocks 分别映射到 **5433 / 3881 / 19030**；新容器映射前先 `ss -tlnp \| grep <port>` |
 
 ## 六、新增库的装法与验证（2026-11-17）
 
@@ -170,4 +179,96 @@ docker run -d --name lab-opengauss --restart unless-stopped \
 |---|---|---|---|---|
 | TiDB | ✅ | ✅ 建库建表插 5 行 | ✅ | 22 条用户管理探针此前已过 |
 | openGauss | ✅ | ✅ 建库建表插 4 行 | ✅ 列清单正常 | 首次把驱动/端口两个坑都踩了，见第五章 |
-| StarRocks / OceanBase | — | — | — | 镜像体积大、当前网络拉取受限，待装 |
+| StarRocks | ✅ | ✅ `select current_user()` / `show databases` | ✅ | `root` + **空口令**、端口 **19030** |
+| OceanBase | ✅ | ✅ `select 1` / `show databases` | ✅ | 用户名 **`root@sys`** + 空口令、端口 **3881** |
+| 瀚高 / 金仓 / 达梦 | ✅ | ✅ | 见第七章 | 2026-11-17 新装，逐项结论在第七章 |
+
+## 七、2026-11-17 新装三个国产库（瀚高 / 人大金仓 / 达梦）
+
+镜像都**不在** DaoCloud 白名单里（`docker.m.daocloud.io` 会回「这镜像不在白名单」），
+用 `docker.1ms.run` 前缀拉（两台加速器都配在 `/etc/docker/daemon.json` 里）：
+`docker.1ms.run/xuxuclassmate/highgo:latest`、`wephoon/kingbase:latest`、`xuxuclassmate/dameng:latest`。
+
+### 1. 瀚高 HighGo 6.0.1（`lab-highgo`，5866）
+
+```bash
+sudo mkdir -p /opt/dbmind-labs/single/data/highgo
+sudo chown -R 5866:5866 /opt/dbmind-labs/single/data/highgo      # 镜像里 highgo 用户就是 uid 5866
+sudo chmod 750 /opt/dbmind-labs/single/data/highgo
+docker run -d --name lab-highgo --restart unless-stopped \
+  -e HIGHGO_PASSWORD='Dbmind@123' -e TZ=Asia/Shanghai \
+  -p 5866:5866 -v /opt/dbmind-labs/single/data/highgo:/opt/HighGo6.0.1-cluster/data \
+  lab-highgo
+```
+
+- 超级用户 `highgo`，库名同用户名；`HIGHGO_PASSWORD` 只在**首次** initdb 时生效（数据目录非空就跳过）。
+- 客户端：`/opt/HighGo6.0.1-cluster/bin/psql`，**必须先 `export LD_LIBRARY_PATH=/opt/HighGo6.0.1-cluster/lib`**
+  （或 `source /opt/HighGo6.0.1-cluster/etc/highgodb.env`，否则报 `libpq.so.5: cannot open shared object file`）。
+- 试用版有效期一年（本次日志：`validate until 2027-11-17`）。
+- DBMind 侧：类型选 **瀚高 HighGo**，走 PostgreSQL 驱动（42.7.4），默认端口 5866。
+
+### 2. 人大金仓 KingbaseES V8R3（`lab-kingbase`，54321）
+
+```bash
+sudo mkdir -p /opt/dbmind-labs/single/data/kingbase
+sudo chown -R 1000:1000 /opt/dbmind-labs/single/data/kingbase    # 镜像里 kingbase 用户是 uid 1000
+touch /opt/dbmind-labs/single/data/kingbase/logfile              # 关键：见下面的「重启死循环」
+docker run -d --name lab-kingbase --restart unless-stopped \
+  -e SYSTEM_PASSWORD='Dbmind@123' -e TZ=Asia/Shanghai \
+  -p 54321:54321 -v /opt/dbmind-labs/single/data/kingbase:/data \
+  lab-kingbase
+```
+
+- **重启死循环（真踩过）**：entrypoint 收尾 `tail -f /data/logfile`，但 `logging_collector` 把日志写进
+  `/data/sys_log/*.log`，`/data/logfile` 根本不会生成 → `tail` 立即退出 → 容器退出 → `restart=unless-stopped`
+  又拉起来、再 `sys_ctl restart`，库被反复打断。**先 `touch /data/logfile`** 给它一个锚点。
+- 超级用户 `SYSTEM`，初始库 `TEST`，另有 `SAMPLES` / `SECURITY` / `TEMPLATE0-2`。
+- `ksql` **不认 `PGPASSWORD`**（只从终端读口令）。脚本里要跑 SQL 的土办法：临时把
+  `/data/sys_hba.conf` 里 `127.0.0.1/32` 那行的 `md5` 改成 `trust` → `sys_ctl -D /data reload` → 跑 SQL →
+  立刻改回 `md5` 再 reload。
+- 客户端在 `/opt/kingbase/ES/Server/bin/`（`ksql`、`sys_ctl`、`initdb`）。
+- DBMind 侧：类型选 **人大金仓 KingbaseES**，驱动 `cn.com.kingbase:kingbase8:9.0.0`（Maven 中央仓库可下），
+  默认端口 54321。
+
+### 3. 达梦 DM8（`lab-dameng`，5236）
+
+```bash
+sudo mkdir -p /opt/dbmind-labs/single/data/dameng
+docker run -d --name lab-dameng --restart unless-stopped \
+  -e SYSDBA_PWD='Dbmind@123' -e TZ=Asia/Shanghai \
+  -p 5236:5236 -v /opt/dbmind-labs/single/data/dameng:/opt/dmdbms/data \
+  lab-dameng
+```
+
+- 超级用户 `SYSDBA`；`SYSDBA_PWD` 只在首次 `dminit` 时生效。
+- **口令含 `@`**：disql 里要写 `./disql SYSDBA/'"Dbmind@123"'@localhost:5236`，不加引号会被当成连接串分隔符。
+- 达梦没有「库」这一层，看到的是**模式**；业务账号 `demo` / `Dbmind123`，演示表 `DEMO.USERS`。
+- 客户端在容器内 `/opt/dmdbms/bin/`（`disql`、`dminit`）。
+- DBMind 侧：类型选 **达梦 DM**，驱动 `com.dameng:DmJdbcDriver18:8.1.3.140`（Maven 中央仓库可下），端口 5236。
+
+### 4. 装完的 DBMind 验证结果（dev 后端 20362，每类 13 条探针）
+
+| 库 | 通过 | 未通过 | 结论 |
+|---|---|---|---|
+| 瀚高 HighGo | **13/13** | — | PG 12.3 内核，DBMind 按 PostgreSQL 那套全通（连接 / 库 / 模式 / 表 / 列 / 数据 / DDL / 索引 / 用户 / 查询） |
+| 达梦 DM8 | **12/13** | `ddl`（「没有取到 users 的建表语句」） | 连接 / 库 / 表 / 列 / 数据 / 索引 / 用户 / 查询全通；`schemas` 返回空数组，DDL 取不到 |
+| 金仓 KingbaseES | **7/13** | `schemas` `tables` `columns` `ddl` `indexes` `users` | 六项同一个根因：**V8R3 只有 `sys_catalog.sys_*`，没有 `pg_catalog`**（`pg_catalog.pg_class` 直接报「关系不存在」）；`information_schema` 视图内部也引用了 `pg_class`，`count(*)` 能过、取列就炸 |
+
+验证脚本：
+
+```bash
+python _uitest/lab-new-types-check.py                     # 临时建连接 → 13 条接口探针 → 删连接
+python _uitest/lab-sql-probe.py DM oracle 5236 SYSDBA DEMO --pw=Dbmind@123 "select 1"
+```
+
+> 金仓要真正可用，得把 `dialect_ops/postgres.rs` 里那批 `pg_catalog` / `pg_namespace` / `pg_class` /
+> `pg_roles` / `pg_indexes` 查询按类型换成 `sys_catalog.sys_*` —— 这是 DBMind 侧改造，不是实验室环境问题；
+> 达梦的 `ddl` 同理（`dbms_metadata.get_ddl` 在 DM8 上的可用性要单独确认）。
+
+### 5. 仍然装不起来的类型（截至 2026-11-17）
+
+| 类型 | 情况 |
+|---|---|
+| GaussDB（华为商用版） | 无公开镜像；开源版就是 openGauss，已装 `lab-opengauss`（5433） |
+| SelectDB | Docker Hub 上 `selectdb/*` 只有 Doris 的 FE/BE/Operator 组件，没有数据库本体；DBMind 的 SelectDB 类型本就复用 Doris 内核，实验室已有 Doris（9030）可覆盖 |
+| Vastbase / UXDB / GoldenDB | `docker pull docker.1ms.run/{vastbase,uxdb,goldendb}/…` 全部 `not found`，需商业介质，实验室无法离线装 |

@@ -17,7 +17,7 @@ export default {
   schemaLevel: 'schema',
   defaultSchema: 'public',
   quoteStyle: 'DOUBLE_QUOTE',
-  logo: '',
+  logo: 'highgo.svg',
   fallbackLogo: 'highgo',
   fileType: false,
   defaultPort: 5866,

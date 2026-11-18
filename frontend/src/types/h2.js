@@ -16,7 +16,7 @@ export default {
   schemaLevel: 'none',
   defaultSchema: '',
   quoteStyle: 'DOUBLE_QUOTE',
-  logo: '',
+  logo: 'h2database.svg',
   fileType: true,
   defaultPort: 9092,
   fallbackLogo: 'h2',

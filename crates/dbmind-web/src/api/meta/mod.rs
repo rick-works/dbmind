@@ -605,6 +605,36 @@ pub(crate) fn split_db_schema(database: &str, dialect: &Dialect) -> (String, Opt
     }
 }
 
+/// 「库[.模式]」串里的**模式名**，给 [`Dialect::table_ref`] / [`Dialect::count_sql_in`] 用。
+///
+/// 与 [`split_db_schema`] 的差别只有一条：`db_is_schema` 的方言（Oracle / DM）树上第一层
+/// 就是模式，**不带点**也可能是模式（达梦的 `database=DEMO`）。
+/// 但"不带点"也可能是连接自己的服务名 / 库名（Oracle 的 `FREE`）—— 那种情况表示"没选模式"，
+/// 必须给 `None`，否则会去找一个叫 FREE 的模式（表都查不到）。
+/// 判据：整串与连接配置里的 database 相同 ⇒ 是连接固有目标，不是模式。
+pub(crate) fn scope_schema_of(
+    database: &str,
+    dialect: &Dialect,
+    own_db: Option<&str>,
+) -> Option<String> {
+    let (db_only, schema) = split_db_schema(database, dialect);
+    if schema.is_some() {
+        return schema;
+    }
+    if !dialect.db_is_schema() {
+        return None;
+    }
+    let bare = db_only.trim();
+    if bare.is_empty() {
+        return None;
+    }
+    let own = own_db.map(str::trim).unwrap_or_default();
+    if !own.is_empty() && bare.eq_ignore_ascii_case(own) {
+        return None;
+    }
+    Some(bare.to_string())
+}
+
 // ------------------------------------------------------------------ 特性与结构清单
 
 /// 各类型的**候选类型清单**（结构编辑器 / 新建表的类型下拉）。
@@ -753,4 +783,45 @@ pub async fn alter(
         );
     }
     Ok(Json(last))
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use super::*;
+
+    // 达梦真机（2026-11-18）踩出来的两类问题，各留两条断言防回归：
+    // ① 树上「库」就是模式，裸模式名（`DEMO`）必须能当模式用；
+    // ② 表引用必须补模式前缀，否则落回登录用户的默认模式（`无效的表或视图名[USERS]`）。
+    #[test]
+    fn 裸模式名只对_db_is_schema_方言生效() {
+        let dm = Dialect::new(ConnectionKind::Dm);
+        let oracle = Dialect::new(ConnectionKind::Oracle);
+        let mysql = Dialect::new(ConnectionKind::Mysql);
+        // 达梦：连接的库名本来就是空的 ⇒ 裸值一律当模式
+        assert_eq!(scope_schema_of("DEMO", &dm, None).as_deref(), Some("DEMO"));
+        // Oracle：裸值等于连接自己的服务名 ⇒ 表示「没选模式」，不能当模式用
+        assert_eq!(scope_schema_of("FREE", &oracle, Some("FREE")), None);
+        // 带点的一律取后半段（Oracle 的 服务名.模式）
+        assert_eq!(
+            scope_schema_of("FREE.SYS", &oracle, Some("FREE")).as_deref(),
+            Some("SYS")
+        );
+        // 其它方言不认模式层
+        assert_eq!(scope_schema_of("demo", &mysql, None), None);
+    }
+
+    #[test]
+    fn 表引用对_db_is_schema_方言补模式前缀() {
+        let dm = Dialect::new(ConnectionKind::Dm);
+        let oracle = Dialect::new(ConnectionKind::Oracle);
+        let mysql = Dialect::new(ConnectionKind::Mysql);
+        assert_eq!(dm.table_ref(Some("DEMO"), "USERS"), "\"DEMO\".\"USERS\"");
+        // 没有模式时保持原样（按会话默认模式解析）
+        assert_eq!(dm.table_ref(None, "USERS"), "\"USERS\"");
+        // 已经是限定名的表名不重复加前缀
+        assert_eq!(dm.table_ref(Some("DEMO"), "OTHER.T"), "\"OTHER\".\"T\"");
+        // 其余方言不加前缀：目标库由影子连接 / `use [库]` / search_path 决定
+        assert_eq!(mysql.table_ref(Some("demo"), "t"), "`t`");
+        assert_eq!(oracle.table_ref(None, "USERS"), "\"USERS\"");
+    }
 }

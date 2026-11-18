@@ -2,6 +2,138 @@
 
 use super::*;
 
+// ==================== KingbaseES 的 sys_catalog 适配 ====================
+//
+// 背景（2026-11-17 在实验室的 KingbaseES V008R003C002B0320 上真机核对）：
+// 人大金仓把 PG 的系统目录整套改名成了 `sys_*`，**没有 `pg_catalog` 兼容层** ——
+// `select count(*) from pg_catalog.pg_class` 直接报「关系不存在」。
+// 于是「PostgreSQL 方言的目录 SQL 原样拿到金仓上跑」整片失败：模式、表、列、DDL、
+// 索引、用户六个页签全空，报错清一色是 `关系 "pg_namespace"/"pg_class" 不存在`。
+//
+// 处理办法：金仓的 impl 把 PG 那份目录 SQL 过一遍**词法级改名**（只作用于我们自己
+// 产出的元数据 SQL，绝不碰用户 SQL）。逐个函数核对过是否存在同名 `sys_` 版本，
+// 没有的（`format_type` / `col_description` / `obj_description` / `aclexplode`）保持原样。
+//
+// 注意 `pg_indexes` 这个**视图**在金仓里存在但定义本身引用了 `pg_class`，一查就报错，
+// 所以索引走 `KB_INDEXES` 直接从 `sys_index` 拼，不做改名。
+const KB_WORDS: &[(&str, &str)] = &[
+    // —— 目录模式 ——
+    ("pg_catalog", "sys_catalog"),
+    // —— 目录表 ——
+    ("pg_namespace", "sys_namespace"),
+    ("pg_attribute", "sys_attribute"),
+    ("pg_attrdef", "sys_attrdef"),
+    ("pg_constraint", "sys_constraint"),
+    ("pg_database", "sys_database"),
+    ("pg_description", "sys_description"),
+    ("pg_auth_members", "sys_auth_members"),
+    ("pg_stat_activity", "sys_stat_activity"),
+    ("pg_stat_database", "sys_stat_database"),
+    ("pg_stat_user_tables", "sys_stat_user_tables"),
+    // 监控「锁等待」面板要从锁视图取 mode（`pg_stat_activity` 没有这一列）
+    ("pg_locks", "sys_locks"),
+    ("pg_tablespace", "sys_tablespace"),
+    ("pg_settings", "sys_settings"),
+    ("pg_trigger", "sys_trigger"),
+    ("pg_roles", "sys_roles"),
+    ("pg_class", "sys_class"),
+    ("pg_index", "sys_index"),
+    ("pg_proc", "sys_proc"),
+    ("pg_type", "sys_type"),
+    // —— 函数（都在真机上验过同名 sys_ 版本可用）——
+    ("pg_total_relation_size", "sys_total_relation_size"),
+    ("pg_relation_size", "sys_relation_size"),
+    // 监控「表空间 Top 20」要单独取索引占用，漏了这一项整块面板报「函数不存在」
+    ("pg_indexes_size", "sys_indexes_size"),
+    ("pg_database_size", "sys_database_size"),
+    ("pg_size_pretty", "sys_size_pretty"),
+    ("pg_get_userbyid", "sys_get_userbyid"),
+    ("pg_get_indexdef", "sys_get_indexdef"),
+    ("pg_get_viewdef", "sys_get_viewdef"),
+    ("pg_get_functiondef", "sys_get_functiondef"),
+    ("pg_get_triggerdef", "sys_get_triggerdef"),
+    ("pg_get_constraintdef", "sys_get_constraintdef"),
+    ("pg_get_serial_sequence", "sys_get_serial_sequence"),
+    ("pg_get_expr", "sys_get_expr"),
+    ("pg_blocking_pids", "sys_blocking_pids"),
+    ("pg_backend_pid", "sys_backend_pid"),
+    ("pg_terminate_backend", "sys_terminate_backend"),
+    ("pg_postmaster_start_time", "sys_postmaster_start_time"),
+    ("pg_control_system", "sys_control_system"),
+];
+
+/// 把一条 PG 目录 SQL 改成金仓可执行的写法。
+///
+/// 按**标识符边界**逐词替换：`pg_index` 不会误伤 `pg_indexes`，字符串字面量里的
+/// `'pg_catalog'` 也会被改成 `'sys_catalog'`（金仓的系统模式就叫这个，正是想要的）。
+///
+/// `pub(crate)` 是给**绕开 `DialectOps` 手写 SQL** 的几处用的（监控总览、容量排行、
+/// 同步的行数估算、比对的外键定义）：它们把 PG 的语句写死在 `match kind` 里，
+/// 金仓跟着 PG 分支走就会整条报「关系 pg_class 不存在」。只允许用在这些**我们自己的**
+/// 元数据语句上，用户 SQL 一律不许过它。
+pub(crate) fn kb_catalog_sql(sql: &str) -> String {
+    let bytes = sql.as_bytes();
+    let mut out = String::with_capacity(sql.len() + 32);
+    let mut i = 0;
+    while i < bytes.len() {
+        let ch = bytes[i] as char;
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            let start = i;
+            while i < bytes.len() {
+                let c = bytes[i] as char;
+                if c.is_ascii_alphanumeric() || c == '_' {
+                    i += 1;
+                } else {
+                    break;
+                }
+            }
+            let word = &sql[start..i];
+            match KB_WORDS.iter().find(|(from, _)| *from == word) {
+                Some((_, to)) => out.push_str(to),
+                None => out.push_str(word),
+            }
+        } else {
+            out.push(ch);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// 目录 SQL 走一遍 [`kb_catalog_sql`]；非 SQL 形态（Absent / Unwritten）原样返回。
+fn kb_meta(meta: Meta) -> Meta {
+    match meta {
+        Meta::Sql(sql) => Meta::Sql(kb_catalog_sql(&sql)),
+        other => other,
+    }
+}
+
+/// 金仓的模式清单：系统模式名是 `sys_*`，且 `information_schema` 是**小写**的
+/// （金仓是 case-insensitive 模式，未加引号的标识符折成大写），所以过滤条件两条都要写。
+const KB_SCHEMAS: &str = "select nspname as name from sys_catalog.sys_namespace \
+     where nspname not like 'pg\\_%' and nspname not like 'sys\\_%' \
+       and nspname <> 'information_schema' \
+       and has_schema_privilege(oid, 'USAGE') order by nspname";
+
+/// 金仓的索引清单：`sys_indexes` 视图自身引用了不存在的 `pg_class`，只能自己拼。
+const KB_INDEXES: &str = "select n.nspname as schema, ic.relname as name, tc.relname as \"table\", \
+     sys_get_indexdef(i.indexrelid) as indexdef \
+     from sys_catalog.sys_index i \
+     join sys_catalog.sys_class ic on ic.oid = i.indexrelid \
+     join sys_catalog.sys_class tc on tc.oid = i.indrelid \
+     join sys_catalog.sys_namespace n on n.oid = tc.relnamespace \
+     where n.nspname not in ('sys_catalog','information_schema') \
+     order by tc.relname, ic.relname";
+
+const KB_DATABASES: &str = "select datname as name from sys_catalog.sys_database \
+     where datistemplate = false and has_database_privilege(datname, 'CONNECT') order by datname";
+
+const KB_DATABASE_STATS: &str = "select (select count(*) from information_schema.tables \
+     where table_schema not in ('sys_catalog','information_schema')) as tables, \
+     sys_size_pretty(sys_database_size(current_database())) as sizeText";
+
+const KB_FINGERPRINT: &str = "select system_identifier::text as v from sys_control_system()";
+
 impl DialectOps for PostgresOps {
     fn is_revocable(&self, scope: &str, privilege: &str, owner: &str, object: &str, kind: &str) -> bool {
         match scope {
@@ -236,7 +368,7 @@ impl DialectOps for KingbaseOps {
     }
 
     fn object_source(&self, object_type: &str, name: &str, schema: Option<&str>) -> Meta {
-        pg_object_source(self, object_type, name, schema)
+        kb_meta(pg_object_source(self, object_type, name, schema))
     }
 
     fn post_create_comments(
@@ -250,7 +382,7 @@ impl DialectOps for KingbaseOps {
     }
 
     fn ddl(&self, table: &str, schema: Option<&str>) -> Meta {
-        pg_ddl(self, table, schema)
+        kb_meta(pg_ddl(self, table, schema))
     }
 
     fn user_action_sql(
@@ -270,55 +402,57 @@ impl DialectOps for KingbaseOps {
     }
 
     fn users(&self) -> Meta {
-        pg_users()
+        kb_meta(pg_users())
     }
 
     fn user_info(&self, name: &str) -> Meta {
-        pg_user_info(self, name)
+        kb_meta(pg_user_info(self, name))
     }
 
     fn user_grants(&self, user: &str, _host: &str) -> Meta {
-        pg_user_grants(self, user)
+        kb_meta(pg_user_grants(self, user))
     }
 
     fn user_roles(&self, user: &str, _host: &str) -> Meta {
-        pg_user_roles(self, user)
+        kb_meta(pg_user_roles(self, user))
     }
 
     fn role_info(&self, name: &str) -> Meta {
-        pg_role_info(self, name)
+        kb_meta(pg_role_info(self, name))
     }
 
     fn role_grants(&self, name: &str, _host: &str) -> Meta {
-        pg_role_grants(self, name)
+        kb_meta(pg_role_grants(self, name))
     }
 
     fn role_inventory(&self) -> Meta {
-        pg_role_inventory()
+        kb_meta(pg_role_inventory())
     }
 
     fn schemas_sql(&self) -> Option<&'static str> {
-        Some(PG_SCHEMAS)
+        // 金仓的系统模式叫 `sys_*`（没有 pg_catalog），过滤条件也得跟着改
+        Some(KB_SCHEMAS)
     }
 
     fn tables_in_schema_sql(&self, schema: &str) -> Option<String> {
-        Some(pg_tables_in_schema(self, schema))
+        Some(kb_catalog_sql(&pg_tables_in_schema(self, schema)))
     }
 
     fn procedures(&self, schema: Option<&str>) -> Meta {
-        pg_procedures(self, schema)
+        kb_meta(pg_procedures(self, schema))
     }
 
     fn triggers(&self, schema: Option<&str>) -> Meta {
-        pg_triggers(self, schema)
+        kb_meta(pg_triggers(self, schema))
     }
 
     fn table_options_sql(&self, database: &str) -> Option<String> {
-        Some(pg_table_options(self, database))
+        Some(kb_catalog_sql(&pg_table_options(self, database)))
     }
 
     fn indexes_sql(&self) -> Option<&'static str> {
-        Some(PG_INDEXES)
+        // `sys_indexes` 视图自身引用了不存在的 pg_class，只能从 sys_index 拼
+        Some(KB_INDEXES)
     }
 
     fn upsert_sql(
@@ -338,19 +472,16 @@ impl DialectOps for KingbaseOps {
         pg_rename_object_sql(self, kind, from, to, schema)
     }
     fn column_types_sql(&self, quoted: &str) -> Meta {
-        pg_column_types(quoted)
+        kb_meta(pg_column_types(quoted))
     }
     fn database_stats_sql(&self) -> Option<&'static str> {
-        Some(pg_database_stats())
+        Some(KB_DATABASE_STATS)
     }
     fn table_comments_sql(&self, quoted: &str) -> Meta {
-        pg_table_comments(quoted)
+        kb_meta(pg_table_comments(quoted))
     }
     fn databases_sql(&self) -> Option<&'static str> {
-        Some(
-            "select datname as name from pg_database where datistemplate = false \
-             and has_database_privilege(datname, 'CONNECT') order by datname",
-        )
+        Some(KB_DATABASES)
     }
     fn folds_ident_lower(&self) -> bool {
         true
@@ -374,7 +505,7 @@ impl DialectOps for KingbaseOps {
         DirectRefDepth::Schema
     }
     fn instance_fingerprint_sql(&self) -> Option<&'static str> {
-        Some("select system_identifier::text as v from pg_control_system()")
+        Some(KB_FINGERPRINT)
     }
 }
 
@@ -500,7 +631,7 @@ fn pg_tables_in_schema(ops: &dyn DialectOps, schema: &str) -> String {
     format!(
         "select c.relname as name, \
          case when c.relkind = 'v' then 'VIEW' else 'BASE TABLE' end as type, \
-         case when c.reltuples < 0 then null else c.reltuples::bigint end as rows \
+         nullif(c.reltuples, -1)::bigint as rows \
          from pg_class c join pg_namespace n on n.oid = c.relnamespace \
          where n.nspname = {} and c.relkind in ('r','p','v','f') \
            and has_table_privilege(c.oid, \
@@ -889,7 +1020,8 @@ fn pg_ddl(ops: &dyn DialectOps, table: &str, schema: Option<&str>) -> Meta {
          string_agg( \
            '  ' || quote_ident(a.attname) || ' ' || format_type(a.atttypid, a.atttypmod) || \
            case when a.attnotnull then ' not null' else '' end || \
-           coalesce(' default ' || pg_get_expr(d.adbin, d.adrelid), ''), \
+           case when d.adbin is null then '' \
+                else ' default ' || pg_get_expr(d.adbin, d.adrelid) end, \
            ',' || chr(10) order by a.attnum) || chr(10) || ');' as ddl \
          from pg_class c \
          join pg_attribute a on a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped \
@@ -982,5 +1114,43 @@ fn pg_grant_line_text<T: DialectOps>(
             ))
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::kb_catalog_sql;
+
+    /// 改名只按**整词**替换：`pg_index` 不许把 `pg_indexes` 改坏，也不许碰用户自己的
+    /// 标识符 —— 这条防线坏了就等于去改用户的表名。
+    #[test]
+    fn 改名只动目录名() {
+        let out = kb_catalog_sql("select * from pg_indexes where t = 'pg_index' and c = my_pg_class");
+        assert!(out.contains("from pg_indexes"), "{out}");
+        assert!(out.contains("'sys_index'"), "{out}");
+        assert!(out.contains("my_pg_class"), "{out}");
+    }
+
+    /// 目录表 / 函数 / 模式字面量三类都要改名：监控总览、容量排行、同步行数估算、
+    /// 比对外键定义四处都复用这个函数，漏一类就是那一路「关系不存在」。
+    #[test]
+    fn 目录表与函数都改成_sys_前缀() {
+        let out = kb_catalog_sql(
+            "select c.relname, pg_total_relation_size(c.oid), pg_indexes_size(c.oid), \
+             pg_terminate_backend(1) from pg_class c \
+             join pg_catalog.pg_namespace n on n.oid = c.relnamespace \
+             where n.nspname not in ('pg_catalog','information_schema')",
+        );
+        for word in [
+            "from sys_class",
+            "sys_total_relation_size(",
+            "sys_indexes_size(",
+            "sys_terminate_backend(",
+            "sys_catalog.sys_namespace",
+            "'sys_catalog'",
+        ] {
+            assert!(out.contains(word), "缺 {word}: {out}");
+        }
+        assert!(!out.contains("pg_"), "还剩 pg_ 目录名: {out}");
     }
 }

@@ -906,7 +906,10 @@ pub async fn start(
 
             if clear_before {
                 task.step(format!("先清空 {table}"));
-                run_sql(&state, &conn, &database, &format!("delete from {target_name}"))
+                // 用方言的清表语句，别写死 `delete from`：StarRocks 的 DELETE 必须带 WHERE
+                //（2026-11-17 实测 `delete from t` ⇒ "Getting analyzing error. Detail message:
+                // Where clause is not set."），清空要走 `truncate table`。
+                run_sql(&state, &conn, &database, &dialect.clear_table_sql(&target_name))
                     .await
                     .map_err(|e| e.message)?;
             }

@@ -33,7 +33,8 @@
       <circle cx="16" cy="16" r="7" fill="none" stroke="#fff" stroke-width="2"/>
       <circle cx="16" cy="9" r="2" fill="#fff"/>
     </svg>
-    <!-- 同族批量注册的国产/云上库：没有官方矢量图，用「缩写 + 品牌色」的小方块区分 -->
+    <!-- 回退分支：有官方 logo（types/*.js 的 logo 字段）时走不到这里；
+         SelectDB 目前没有官方矢量素材，用「缩写 + 品牌色」的小方块顶替 -->
     <svg v-else-if="fallbackLogo === 'greatsql'" viewBox="0 0 32 32" :width="size" :height="size">
       <rect width="32" height="32" rx="5" fill="#1f7a4d"/>
       <text x="16" y="21" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold" font-family="Arial">GR</text>

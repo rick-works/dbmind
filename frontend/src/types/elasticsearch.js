@@ -13,7 +13,7 @@ export default {
   schemaLevel: 'none',
   defaultSchema: '',
   quoteStyle: 'DOUBLE_QUOTE',
-  logo: '',
+  logo: 'Elastic.svg',
   fileType: false,
   defaultPort: 9200,
   // 宿主支持 Basic 认证（用户名:密码 拼 Authorization 头）；ES 8.x 默认开启安全认证，

@@ -46,8 +46,73 @@ fn need_conn(req: &AiRequest) -> XResult<String> {
         .ok_or_else(|| XError::bad_request("缺少 connectionId 参数"))
 }
 
+/// 金仓（KingbaseES V8R3）的表清单：直接读 `sys_class` / `sys_namespace`。
+///
+/// 为什么必须绕开驱动：V8R3 服务端没有 `pg_catalog` 兼容层，而 kingbase8 驱动的
+/// `getTables()` / `getColumns()` 内部 SQL 硬编码了 `pg_catalog.pg_namespace` ——
+/// 一条就报「关系 PG_CATALOG.PG_namespace 不存在」。治理 / 质量 / ER 图这一整片
+/// 都建立在「列出表」上，所以兜底放在 [`tables_of`] 这一层。
+///
+/// 返回 `None` = 目录查询没拿到行（不是「这个库没有表」），交给原路径报真实错误。
+async fn kingbase_tables(state: &AppState, conn: &str, database: &str) -> Option<Vec<TableInfo>> {
+    let sql = crate::api::dialect_ops::kb_catalog_sql(
+        "select c.relname as name, \
+         case when c.relkind = 'v' then 'VIEW' else 'TABLE' end as type, \
+         case when c.reltuples < 0 then null else c.reltuples::bigint end as rows, \
+         coalesce(obj_description(c.oid, 'pg_class'), '') as comment \
+         from pg_class c join pg_namespace n on n.oid = c.relnamespace \
+         where c.relkind in ('r','p','v') \
+           and n.nspname not in ('pg_catalog','information_schema') \
+         order by n.nspname, c.relname",
+    );
+    let result = run_sql_in(state, conn, database, sql, MAX_TABLES * 20).await.ok()?;
+    let rows = rows_of(&result);
+    if rows.is_empty() {
+        return None;
+    }
+    let mut out = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let name = crate::api::meta::text_ci(row, "name");
+        if name.is_empty() {
+            continue;
+        }
+        let kind = if crate::api::meta::text_ci(row, "type").eq_ignore_ascii_case("view") {
+            TableKind::View
+        } else {
+            TableKind::Table
+        };
+        let comment = crate::api::meta::text_ci(row, "comment");
+        out.push(TableInfo {
+            name,
+            kind,
+            row_estimate: row
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case("rows"))
+                .and_then(|(_, v)| shape::value_to_i64(v)),
+            comment: if comment.trim().is_empty() {
+                None
+            } else {
+                Some(comment)
+            },
+        });
+    }
+    Some(out)
+}
+
 /// 元数据助手：治理 / 质量两块都要用（`pub(crate)` 供 `governance`/`quality` 复用）。
 pub(crate) async fn tables_of(state: &AppState, conn: &str, database: &str) -> XResult<Vec<TableInfo>> {
+    // 金仓：驱动 `getTables()` 不可用（见 [`kingbase_tables`]），改走系统目录。
+    // 失败（目录查不到）时继续走原路径，保持原有错误信息。
+    if let Ok((_, dialect)) = crate::api::meta::ctx_of(state, conn).await {
+        if dialect.kind.key() == "kingbase" {
+            if let Some(tables) = kingbase_tables(state, conn, database).await {
+                return Ok(tables
+                    .into_iter()
+                    .filter(|table| table.kind == TableKind::Table)
+                    .collect());
+            }
+        }
+    }
     let target = crate::api::scope::resolve(state, conn, database).await?;
     crate::api::driver::ensure_for_connection(state, &target).await?;
     let engine = state.engine();
@@ -64,6 +129,19 @@ pub(crate) async fn columns_of(
     database: &str,
     table: &str,
 ) -> XResult<Vec<ColumnDetail>> {
+    // 金仓：`getColumns()` 与 `getTables()` 同病（驱动内部 SQL 引用 pg_catalog），
+    // 敏感字段识别 / 质量检查都要逐表取列 —— 走 `/columns` 那条系统目录实现。
+    if let Ok((_, dialect)) = crate::api::meta::ctx_of(state, conn).await {
+        if dialect.kind.key() == "kingbase" {
+            let (_, schema) = crate::api::meta::split_db_schema(database, &dialect);
+            if let Some(columns) =
+                crate::api::meta::kingbase_columns(state, conn, database, table, schema.as_deref())
+                    .await
+            {
+                return Ok(columns);
+            }
+        }
+    }
     let target = crate::api::scope::resolve(state, conn, database).await?;
     let engine = state.engine();
     let name = table.to_string();

@@ -37,10 +37,11 @@ pub(crate) async fn build_table_ddl(
     database: &str,
     table: &str,
 ) -> XResult<(String, bool)> {
-    let (_, dialect) = ctx_of(state, id).await?;
+    let (record, dialect) = ctx_of(state, id).await?;
     // 模式（「库.模式」拆出来的那半）交给方言：Oracle 靠它做 owner、PG 靠它筛命名空间。
     // 不传的话 Oracle 会按会话默认模式找表，跨模式直接 ORA-31603。
-    let schema = split_db_schema(database, &dialect).1;
+    // Oracle / DM 的裸模式名（达梦 `database=DEMO`）同样要当模式用，见 scope_schema_of。
+    let schema = scope_schema_of(database, &dialect, record.config.database.as_deref());
     let sql = match dialect.ddl(table, schema.as_deref()) {
         Meta::Sql(sql) => sql,
         Meta::Absent => return Ok((String::new(), false)),
@@ -190,7 +191,8 @@ async fn synthesize_ddl(
     enrich_column_types(state, id, database, table, &mut columns).await;
     // `None` = 同类型：这里是"查看 DDL / 导出"，列的来源就是本连接自己，不需要类型翻译
     Ok(dialect.create_table_from_columns(
-        &crate::api::export::qualified(table, database, dialect),
+        // 这里的 `database` 已经是调用方拼好的「库.模式」串，schema 由它内部拆，传 None 即可
+        &crate::api::export::qualified(table, database, None, dialect),
         &columns,
         None,
     ))
@@ -366,9 +368,9 @@ pub async fn object_info(
             "synthesized": synthesized,
         })));
     }
-    let (_, dialect) = ctx_of(&state, &id).await?;
-    // 同 build_table_ddl：模式要传给方言（Oracle 的 owner 过滤就靠它）
-    let schema = split_db_schema(&database, &dialect).1;
+    let (record, dialect) = ctx_of(&state, &id).await?;
+    // 同 build_table_ddl：模式要传给方言（Oracle 的 owner 过滤就靠它；达梦的裸模式名同理）
+    let schema = scope_schema_of(&database, &dialect, record.config.database.as_deref());
     let sql = match dialect.object_source(&object_type, &name, schema.as_deref()) {
         Meta::Sql(sql) => sql,
         Meta::Absent => return Ok(Json(json!({ "ddl": "", "sql": "" }))),
@@ -487,11 +489,11 @@ pub async fn procedures(
     RawQuery(raw): RawQuery,
 ) -> XResult<Json<Value>> {
     let params = Params::parse(raw.as_deref());
-    let (_, dialect) = ctx_of(&state, &id).await?;
+    let (record, dialect) = ctx_of(&state, &id).await?;
     let database = params.get("database").unwrap_or_default();
     // 把「库.模式」里的模式拆出来交给方言：Oracle 的例程要靠它做 owner 过滤
-    // （不拆的话查的是会话当前模式，树上点任何模式都是 0）。
-    let schema = split_db_schema(&database, &dialect).1;
+    // （不拆的话查的是会话当前模式，树上点任何模式都是 0）。没有库层时 `DEMO` 本身就是模式。
+    let schema = scope_schema_of(&database, &dialect, record.config.database.as_deref());
     meta_list(
         &state,
         &id,
@@ -509,9 +511,10 @@ pub async fn triggers(
     RawQuery(raw): RawQuery,
 ) -> XResult<Json<Value>> {
     let params = Params::parse(raw.as_deref());
-    let (_, dialect) = ctx_of(&state, &id).await?;
+    let (record, dialect) = ctx_of(&state, &id).await?;
     let database = params.get("database").unwrap_or_default();
-    let schema = split_db_schema(&database, &dialect).1; // 同 procedures：模式要传给方言
+    // 同 procedures：模式要传给方言（Oracle / DM 的裸模式名也算）
+    let schema = scope_schema_of(&database, &dialect, record.config.database.as_deref());
     meta_list(
         &state,
         &id,
@@ -632,12 +635,12 @@ pub async fn rename_object(
     if name.is_empty() || new_name.is_empty() {
         return Err(XError::bad_request("重命名需要原名与新名"));
     }
-    let (_, dialect) = ctx_of(&state, &id).await?;
-    // 模式：请求里的「库.模式」拆出来的那半（没有就是 None）
+    let (record, dialect) = ctx_of(&state, &id).await?;
+    // 模式：请求里的「库.模式」拆出来的那半（没有就是 None）；Oracle / DM 的裸模式名也算
     let schema = body
         .get("database")
         .and_then(Value::as_str)
-        .map(|db| split_db_schema(db, &dialect).1)
+        .map(|db| scope_schema_of(db, &dialect, record.config.database.as_deref()))
         .unwrap_or(None);
     // Oracle 的 `RENAME` **旧名可以带模式，而且必须带** —— DBMind 的会话刻意不按树上
     // 选中的模式切换（与取定义那几处同一个原因），不带就只能改会话自己模式里的对象。

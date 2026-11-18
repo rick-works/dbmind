@@ -74,6 +74,37 @@ public final class ResultMapper {
     }
 
     /**
+     * 列名：取不到就退化成 {@code columnN}，绝不让整条查询失败。
+     */
+    private static String safeLabel(ResultSetMetaData meta, int index) {
+        try {
+            String label = meta.getColumnLabel(index);
+            return label == null || label.isEmpty() ? ("column" + index) : label;
+        } catch (SQLException e) {
+            return "column" + index;
+        }
+    }
+
+    /**
+     * 类型名：取不到就返回空串，同样不失败。
+     *
+     * <p>为什么必须容错：KingbaseES V8R3 的 JDBC 驱动在解析「基表列」时会去查
+     * {@code pg_catalog.pg_class}（该版本只有 {@code sys_catalog}），于是
+     * {@code getColumnTypeName} 抛 SQLException，用户看到的是
+     * {@code select * from t} 整条报「关系 PG_CATALOG.PG_class 不存在」。
+     * 类型名只是给界面显示列类型用的，取不到应当降级，而不是拖垮查询。
+     * 实测：只有「直接引用基表列」的结果列会触发，表达式/聚合/常量列不受影响。
+     */
+    private static String safeTypeName(ResultSetMetaData meta, int index) {
+        try {
+            String typeName = meta.getColumnTypeName(index);
+            return typeName == null ? "" : typeName;
+        } catch (SQLException e) {
+            return "";
+        }
+    }
+
+    /**
      * 读结果集。{@code compact=true} 时每行用**裸值**表示。
      *
      * <p>为什么值得单开一条路：旧格式每个单元格都是一个带类型标签的对象
@@ -97,8 +128,8 @@ public final class ResultMapper {
         JsonArray columns = new JsonArray();
         for (int i = 1; i <= columnCount; i++) {
             JsonObject column = new JsonObject();
-            column.addProperty("name", meta.getColumnLabel(i));
-            column.addProperty("typeName", meta.getColumnTypeName(i));
+            column.addProperty("name", safeLabel(meta, i));
+            column.addProperty("typeName", safeTypeName(meta, i));
             columns.add(column);
         }
 
@@ -151,8 +182,8 @@ public final class ResultMapper {
         JsonArray columns = new JsonArray();
         for (int i = 1; i <= columnCount; i++) {
             JsonObject column = new JsonObject();
-            column.addProperty("name", meta.getColumnLabel(i));
-            column.addProperty("typeName", meta.getColumnTypeName(i));
+            column.addProperty("name", safeLabel(meta, i));
+            column.addProperty("typeName", safeTypeName(meta, i));
             columns.add(column);
         }
 

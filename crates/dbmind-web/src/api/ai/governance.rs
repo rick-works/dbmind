@@ -420,7 +420,17 @@ pub async fn capacity(
     let mut size_supported = false;
     let mut note: Option<String> = None;
 
-    if let Some(sql) = capacity_sql(dialect.kind.key()) {
+    // 金仓的系统目录是 sys_*（没有 pg_catalog 兼容层），PG 那份容量 SQL 要整条改名，
+    // 否则这块排行恒空。取数失败本来就走注释里的降级路径，改名只是把「必然失败」修好。
+    let capacity_sql_text = capacity_sql(dialect.kind.key()).map(|sql| {
+        if dialect.kind.key() == "kingbase" {
+            crate::api::dialect_ops::kb_catalog_sql(sql)
+        } else {
+            sql.to_string()
+        }
+    });
+
+    if let Some(sql) = capacity_sql_text {
         match run_sql_in_background(&state, &conn, &database, sql.to_string(), MAX_TABLES_HARD).await {
             Ok(result) => {
                 size_supported = true;

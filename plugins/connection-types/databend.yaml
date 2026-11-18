@@ -1,0 +1,51 @@
+schemaVersion: 1
+order: 1210
+dbType: databend
+rustVariant: Databend
+label: Databend
+dialect: MySQL
+runtimeMode: agent
+mcpMode: bridge
+agentKey: mysql
+driverStoreVisible: true
+driverStoreOrder: 24
+singleConnectionPool: false
+metadataConnectionScoped: false
+# 并发上限：MPP 云原生数仓，查询天然并发；与 Doris 同档。
+maxConnections: 8
+skipTcpProbe: false
+localFile: false
+# Databend 的 MySQL 协议端口默认 3307（HTTP 查询接口是 8000，不是这条通道）
+defaultPort: 3307
+jdbc:
+  driverClass: com.mysql.cj.jdbc.Driver
+  # 与 mysql / doris 同一条模板（同一个驱动）
+  urlTemplate: "jdbc:mysql://{host}:{port}/{database}?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&connectTimeout=10000&socketTimeout=600000&rewriteBatchedStatements=true&useCursorFetch=true&zeroDateTimeBehavior=CONVERT_TO_NULL&allowMultiQueries=true"
+  # 2026-11-17 真机（lab-databend，Databend 1.2.881）：MySQL 9.1.0 驱动握手正常
+  # （服务端 version() 自报 "MySQL 8.0.90-v1.2.881…"），不像老 Doris 那样踩 eucjpms。
+  artifact: com.mysql:mysql-connector-j:9.1.0
+traits:
+  singleDatabase: false
+  schemaAware: true
+# 2026-11-17 **真机验证**：实验机 lab-databend（MySQL 协议 3307 / HTTP 8000），
+# 连接、库表列、数据浏览、SQL、导出、建库建表全部通过。见 _uitest/audit_all.py databend。
+supportLevel: operate
+capabilities:
+  queryExecution: true
+  metadataBrowse: true
+  objectBrowser: true
+  objectSource: true
+  schemaSearch: true
+  diagram: false
+  # 2026-11-17 真机验证：insert / update / delete / 建表 / 加列 / 改列类型(MODIFY COLUMN) /
+  # 改列名(RENAME COLUMN) / 表与列注释 全部通过 ⇒ DML 与结构编辑都打开。
+  tableDataEdit: true
+  tableStructureEdit: true
+  tableImport: true
+  dataTransfer: true
+  sqlFileExecution: true
+  databaseCreate: true
+  fieldLineage: false
+  sqlExplain: true
+  userAdmin: false
+  driverManagement: true

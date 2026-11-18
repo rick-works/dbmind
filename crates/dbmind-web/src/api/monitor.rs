@@ -81,14 +81,24 @@ pub fn supported(key: &str) -> bool {
 /// 按方言取监控计划。`None` = 这个类型还没有监控实现。
 fn plan(key: &str) -> Option<Plan> {
     match key {
-        // TiDB 兼容 show global status / @@max_connections / information_schema.tables
-        "mysql" | "mariadb" | "tidb" | "oceanbase" => Some(mysql_plan()),
+        // MySQL 分叉与兼容库（GreatSQL / GoldenDB）系统表同名，直接共用。
+        // **同族漏项就是静默「监控未接入」**：GreatSQL 有实例却一直空白页
+        //（2026-11-17 真机巡检发现），所以这里按族一次性列全。
+        "mysql" | "mariadb" | "greatsql" | "goldendb" => Some(mysql_plan()),
+        // TiDB / OceanBase 看着也是 MySQL，但锁等待那张表不存在（真机实测）
+        "tidb" => Some(tidb_plan()),
+        "oceanbase" => Some(oceanbase_plan()),
         // Doris 看着像 MySQL，实测四处不同（详见 doris_plan 的表格）—— 不能共用
-        // StarRocks 与 Doris 同源：KPI / 面板同一套
-        "doris" | "starrocks" => Some(doris_plan()),
+        "doris" | "selectdb" => Some(doris_plan()),
+        // StarRocks 与 Doris 同源，但没有 information_schema.processlist（真机实测）
+        "starrocks" => Some(starrocks_plan()),
         "sqlserver" => Some(sqlserver_plan()),
         "sqlite" => Some(sqlite_plan()),
-        "postgresql" | "kingbase" | "opengauss" => Some(postgres_plan()),
+        // PostgreSQL 族：Kingbase 由 monitor_sql 统一改名到 sys_*；
+        // HighGo / Vastbase / UXDB 是 PG 内核分叉，GaussDB 走 openGauss，字典同名。
+        "postgresql" | "kingbase" | "opengauss" | "highgo" | "vastbase" | "uxdb" | "gaussdb" => {
+            Some(postgres_plan())
+        }
         "clickhouse" => Some(clickhouse_plan()),
         _ => None,
     }
@@ -354,6 +364,57 @@ fn doris_plan() -> Plan {
 }
 
 // ---------------------------------------------------------------- MySQL 系
+
+/// TiDB：与 MySQL 只差锁等待那张表 —— TiDB 没有 `sys.innodb_lock_waits`
+///（真机实测返回 0 行 0 列，界面就是一块红色「表不存在」），锁等待在
+/// `information_schema.data_lock_waits`。列名与 MySQL 不同，仍旧 `select *`
+/// 让界面按真实列渲染。
+fn tidb_plan() -> Plan {
+    let mut plan = mysql_plan();
+    for panel in plan.panels.iter_mut() {
+        if panel.key == "locks" {
+            panel.sql = "select * from information_schema.data_lock_waits limit 100";
+            panel.id_cols = &[];
+            panel.copy_cols = &[];
+        }
+    }
+    plan
+}
+
+/// OceanBase（MySQL 模式）：`sys.innodb_lock_waits` 与 `information_schema.data_lock_waits`
+/// **都不存在**（真机实测都是 0 行 0 列）⇒ 干脆不给「锁等待」这块面板，
+/// 而不是挂一个必然报错的块。
+fn oceanbase_plan() -> Plan {
+    let mut plan = mysql_plan();
+    plan.panels.retain(|panel| panel.key != "locks");
+    plan
+}
+
+/// StarRocks：与 Doris 同源，但**没有** `information_schema.processlist` /
+/// `active_queries`（真机实测 0 行 0 列），会话只能靠 `SHOW PROCESSLIST`
+/// —— 它的列名是首字母大写的（`Id` / `User` / `Info` …），杀会话的列要跟着改。
+fn starrocks_plan() -> Plan {
+    let mut plan = doris_plan();
+    // 这两个 KPI 直接查 processlist，StarRocks 上没有
+    plan.kpis.retain(|item| {
+        !matches!(
+            item.get("metric").and_then(Value::as_str),
+            Some("connections") | Some("running")
+        )
+    });
+    plan.metrics
+        .retain(|(key, _)| !matches!(*key, "connections" | "running"));
+    // 「运行中的查询」依赖 information_schema.active_queries，同样不存在
+    plan.panels.retain(|panel| panel.key != "active");
+    for panel in plan.panels.iter_mut() {
+        if panel.key == "sessions" {
+            panel.sql = "show processlist";
+            panel.id_cols = &["Id"];
+            panel.copy_cols = &["Info"];
+        }
+    }
+    plan
+}
 
 fn mysql_plan() -> Plan {
     Plan {
@@ -736,11 +797,16 @@ fn postgres_plan() -> Plan {
                 sort_hint: "",
                 id_cols: &[],
                 copy_cols: &[],
-                sql: "select w.pid as waiting_pid, l.pid as blocking_pid, \
-                      w.locktype, w.mode, w.wait_event, \
+                // `locktype` / `mode` 在 **pg_locks** 里，`pg_stat_activity` 没有这两列
+                // —— 原来写 `w.locktype, w.mode`，PG 与金仓都是一执行就报「字段不存在」，
+                // 「锁等待」面板从上线起就是「获取失败」（2026-11-17 金仓真机实测打出来的）。
+                sql: "select w.pid as waiting_pid, b.pid as blocking_pid, \
+                      w.wait_event_type, w.wait_event, \
+                      (select l.mode from pg_locks l \
+                        where l.pid = w.pid and not l.granted limit 1) as lock_mode, \
                       left(coalesce(w.query, ''), 200) as waiting_query \
                       from pg_stat_activity w \
-                      join lateral unnest(pg_blocking_pids(w.pid)) as l(pid) on true \
+                      cross join lateral unnest(pg_blocking_pids(w.pid)) as b(pid) \
                       where cardinality(pg_blocking_pids(w.pid)) > 0",
             },
             Panel {
@@ -793,6 +859,19 @@ fn postgres_plan() -> Plan {
 /// —— 前端只能按对象的键推列，于是列序恒为字母序（`table_name` 排在 `size_mb` 后面）。
 /// 界面上的原话是「表名放最后一列不太友好」：那是字母序，不是 SQL 里写的顺序。
 /// 内核本来的 `QueryResult.columns` 就是有序的，这里把它一并交给前端。
+/// 取数前按方言改名：金仓的系统目录叫 `sys_*`（**没有** `pg_catalog` 兼容层），
+/// 而 PG 那份监控计划是照着 `pg_stat_activity` 这类名字写的 —— 不改名的话
+/// 金仓上每一块面板都报「关系不存在」，页面能开、数据全空。
+///
+/// 只作用在这份**我们自己的**监控语句上；别的地方（用户 SQL）绝不能过这个函数。
+fn monitor_sql(key: &str, sql: &str) -> String {
+    if key == "kingbase" {
+        crate::api::dialect_ops::kb_catalog_sql(sql)
+    } else {
+        sql.to_string()
+    }
+}
+
 async fn query_rows(
     state: &AppState,
     id: &str,
@@ -878,8 +957,11 @@ pub async fn overview(state: &AppState, id: &str, database: &str, key: &str) -> 
             "supported": false,
             "database": database,
             "message": format!(
-                "{} 的实时监控尚未接入。已支持：MySQL / MariaDB、Doris、SQL Server、\
-                 SQLite、PostgreSQL / KingbaseES、ClickHouse",
+                "{} 的实时监控尚未接入。已支持：\
+                 MySQL / MariaDB / GreatSQL / GoldenDB / TiDB / OceanBase、\
+                 Doris / SelectDB / StarRocks、\
+                 PostgreSQL / KingbaseES / openGauss / HighGo、\
+                 SQL Server、ClickHouse、SQLite",
                 key
             ),
         })));
@@ -890,7 +972,7 @@ pub async fn overview(state: &AppState, id: &str, database: &str, key: &str) -> 
     let mut errors: Map<String, Value> = Map::new();
 
     for (name, sql) in &plan.metrics {
-        match query_rows(state, id, database, sql).await {
+        match query_rows(state, id, database, &monitor_sql(key, sql)).await {
             // 指标只需要值，不需要列顺序（下面那个循环才要）
             Ok((_columns, rows)) => {
                 if *name == "status" {
@@ -962,7 +1044,7 @@ pub async fn overview(state: &AppState, id: &str, database: &str, key: &str) -> 
     );
 
     for panel in &plan.panels {
-        match query_rows(state, id, database, panel.sql).await {
+        match query_rows(state, id, database, &monitor_sql(key, panel.sql)).await {
             Ok((columns, rows)) => {
                 // 键值面板统一成 `{name, value}`：前端 kv 网格取「排序后的第一个键」当名字，
                 // 直接丢 `show variables` 的 `{Variable_name, Value}` 会被排成 (值, 名) 显示反
@@ -1048,11 +1130,15 @@ pub async fn monitor_kill(
     }
     let (_, dialect) = ctx_of(&state, &id).await?;
     let sql = match dialect.kind.key() {
-        "mysql" | "mariadb" | "doris" | "tidb" | "oceanbase" => format!("kill {}", session_id.trim()),
+        "mysql" | "mariadb" | "doris" | "starrocks" | "selectdb" | "tidb" | "oceanbase"
+        | "greatsql" | "goldendb" => format!("kill {}", session_id.trim()),
         "sqlserver" => format!("kill {}", session_id.trim()),
-        "postgresql" | "kingbase" | "opengauss" => {
+        // PG 族（HighGo / Vastbase / UXDB 是 PG 内核，GaussDB 走 openGauss）
+        "postgresql" | "opengauss" | "highgo" | "vastbase" | "uxdb" | "gaussdb" => {
             format!("select pg_terminate_backend({})", session_id.trim())
         }
+        // 金仓没有 pg_catalog 兼容层，终止函数同样是 sys_ 前缀
+        "kingbase" => format!("select sys_terminate_backend({})", session_id.trim()),
         "sqlite" => {
             return Ok(Json(json!({
                 "success": false,
@@ -1115,6 +1201,47 @@ mod tests {
         }
         for key in ["oracle", "dm", "db2", "h2", "derby"] {
             assert!(plan(key).is_none(), "{key} 目前不该有监控计划");
+        }
+    }
+
+    /// 金仓没有 `pg_catalog` 兼容层（系统目录叫 `sys_*`）：PG 那份监控计划里的每一条
+    /// SQL 都必须能整条改名。漏一项就是一块面板「获取失败」——这里逐条断言取数时
+    /// 真正走的那层 `monitor_sql`，防止以后新增面板又忘了这件事。
+    #[test]
+    fn 金仓的监控_sql_全部改名() {
+        let kb_plan = plan("kingbase").expect("kingbase 应有监控计划");
+        let sqls: Vec<String> = kb_plan
+            .metrics
+            .iter()
+            .map(|(_, sql)| monitor_sql("kingbase", sql))
+            .chain(
+                kb_plan
+                    .panels
+                    .iter()
+                    .map(|panel| monitor_sql("kingbase", panel.sql)),
+            )
+            .collect();
+        for sql in &sqls {
+            assert!(
+                !sql.contains("pg_"),
+                "金仓语句里还留着 pg_ 目录名（金仓上会报关系不存在）: {sql}"
+            );
+        }
+
+        // 其它方言一个字都不许动：openGauss 有 pg_catalog，PG 本来就叫这个
+        for key in ["postgresql", "opengauss"] {
+            let other = plan(key).expect("应有监控计划");
+            for (_, sql) in &other.metrics {
+                assert_eq!(monitor_sql(key, sql), *sql, "{key} 的指标语句被误改");
+            }
+            for panel in &other.panels {
+                assert_eq!(
+                    monitor_sql(key, panel.sql),
+                    panel.sql,
+                    "{key}/{} 的面板语句被误改",
+                    panel.key
+                );
+            }
         }
     }
 

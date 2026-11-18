@@ -201,7 +201,7 @@
       "rustVariant": "Highgo",
       "singleConnectionPool": false,
       "skipTcpProbe": false,
-      "supportLevel": "experimental",
+      "supportLevel": "operate",
       "traits": {
         "schemaAware": true,
         "singleDatabase": false
@@ -254,7 +254,7 @@
       "rustVariant": "Vastbase",
       "singleConnectionPool": false,
       "skipTcpProbe": false,
-      "supportLevel": "experimental",
+      "supportLevel": "operate",
       "traits": {
         "schemaAware": true,
         "singleDatabase": false
@@ -281,11 +281,11 @@
         "tableStructureEdit": true,
         "userAdmin": true
       },
-      "defaultPort": 5432,
+      "defaultPort": 52025,
       "dialect": "PostgreSQL",
       "driverStoreOrder": 23,
       "driverStoreVisible": true,
-      "exposed": true,
+      "exposed": false,
       "jdbc": {
         "artifact": "org.postgresql:postgresql:42.7.4",
         "artifacts": [
@@ -307,7 +307,7 @@
       "rustVariant": "Uxdb",
       "singleConnectionPool": false,
       "skipTcpProbe": false,
-      "supportLevel": "experimental",
+      "supportLevel": "operate",
       "traits": {
         "schemaAware": true,
         "singleDatabase": false
@@ -413,7 +413,7 @@
       "rustVariant": "Greatsql",
       "singleConnectionPool": false,
       "skipTcpProbe": false,
-      "supportLevel": "experimental",
+      "supportLevel": "operate",
       "traits": {
         "schemaAware": false,
         "singleDatabase": false
@@ -444,7 +444,7 @@
       "dialect": "MySQL",
       "driverStoreOrder": 19,
       "driverStoreVisible": true,
-      "exposed": true,
+      "exposed": false,
       "jdbc": {
         "artifact": "com.mysql:mysql-connector-j:9.1.0",
         "artifacts": [
@@ -466,7 +466,7 @@
       "rustVariant": "Goldendb",
       "singleConnectionPool": false,
       "skipTcpProbe": false,
-      "supportLevel": "experimental",
+      "supportLevel": "operate",
       "traits": {
         "schemaAware": false,
         "singleDatabase": false
@@ -899,6 +899,59 @@
       "typeCode": "DORIS"
     },
     {
+      "agentKey": "mysql",
+      "capabilities": {
+        "dataTransfer": true,
+        "databaseCreate": true,
+        "diagram": false,
+        "driverManagement": true,
+        "fieldLineage": false,
+        "metadataBrowse": true,
+        "objectBrowser": true,
+        "objectSource": true,
+        "queryExecution": true,
+        "schemaSearch": true,
+        "sqlExplain": true,
+        "sqlFileExecution": true,
+        "tableDataEdit": true,
+        "tableImport": true,
+        "tableStructureEdit": true,
+        "userAdmin": false
+      },
+      "defaultPort": 3307,
+      "dialect": "MySQL",
+      "driverStoreOrder": 24,
+      "driverStoreVisible": true,
+      "exposed": true,
+      "jdbc": {
+        "artifact": "com.mysql:mysql-connector-j:9.1.0",
+        "artifacts": [
+          "com.mysql:mysql-connector-j:9.1.0"
+        ],
+        "driverClass": "com.mysql.cj.jdbc.Driver",
+        "urlTemplate": "jdbc:mysql://{host}:{port}/{database}?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&connectTimeout=10000&socketTimeout=600000&rewriteBatchedStatements=true&useCursorFetch=true&zeroDateTimeBehavior=CONVERT_TO_NULL&allowMultiQueries=true"
+      },
+      "key": "databend",
+      "label": "Databend",
+      "localFile": false,
+      "maxConnections": 8,
+      "mcpMode": "bridge",
+      "metadataConnectionScoped": false,
+      "module": "mysql",
+      "order": 1210,
+      "protocol": "sql",
+      "runtimeMode": "agent",
+      "rustVariant": "Databend",
+      "singleConnectionPool": false,
+      "skipTcpProbe": false,
+      "supportLevel": "operate",
+      "traits": {
+        "schemaAware": true,
+        "singleDatabase": false
+      },
+      "typeCode": "DATABEND"
+    },
+    {
       "agentKey": "doris",
       "capabilities": {
         "dataTransfer": true,
@@ -922,7 +975,7 @@
       "dialect": "MySQL",
       "driverStoreOrder": 20,
       "driverStoreVisible": true,
-      "exposed": true,
+      "exposed": false,
       "jdbc": {
         "artifact": "mysql:mysql-connector-java:8.0.28",
         "artifacts": [
@@ -944,12 +997,65 @@
       "rustVariant": "Selectdb",
       "singleConnectionPool": false,
       "skipTcpProbe": false,
-      "supportLevel": "experimental",
+      "supportLevel": "operate",
       "traits": {
         "schemaAware": true,
         "singleDatabase": false
       },
       "typeCode": "SELECTDB"
+    },
+    {
+      "agentKey": "postgresql",
+      "capabilities": {
+        "dataTransfer": true,
+        "databaseCreate": true,
+        "diagram": false,
+        "driverManagement": true,
+        "fieldLineage": false,
+        "metadataBrowse": true,
+        "objectBrowser": true,
+        "objectSource": true,
+        "queryExecution": true,
+        "schemaSearch": true,
+        "sqlExplain": true,
+        "sqlFileExecution": true,
+        "tableDataEdit": false,
+        "tableImport": false,
+        "tableStructureEdit": false,
+        "userAdmin": false
+      },
+      "defaultPort": 4566,
+      "dialect": "PostgreSQL",
+      "driverStoreOrder": 25,
+      "driverStoreVisible": true,
+      "exposed": true,
+      "jdbc": {
+        "artifact": "org.postgresql:postgresql:42.7.4",
+        "artifacts": [
+          "org.postgresql:postgresql:42.7.4"
+        ],
+        "driverClass": "org.postgresql.Driver",
+        "urlTemplate": "jdbc:postgresql://{host}:{port}/{database}?sslmode=prefer&reWriteBatchedInserts=true&stringtype=unspecified&tcpKeepAlive=true"
+      },
+      "key": "risingwave",
+      "label": "RisingWave",
+      "localFile": false,
+      "maxConnections": 8,
+      "mcpMode": "bridge",
+      "metadataConnectionScoped": false,
+      "module": "postgresql",
+      "order": 1220,
+      "protocol": "sql",
+      "runtimeMode": "agent",
+      "rustVariant": "Risingwave",
+      "singleConnectionPool": false,
+      "skipTcpProbe": false,
+      "supportLevel": "operate",
+      "traits": {
+        "schemaAware": true,
+        "singleDatabase": false
+      },
+      "typeCode": "RISINGWAVE"
     },
     {
       "agentKey": "mysql",
@@ -1294,7 +1400,7 @@
       "dialect": "PostgreSQL",
       "driverStoreOrder": 24,
       "driverStoreVisible": true,
-      "exposed": true,
+      "exposed": false,
       "jdbc": {
         "artifact": "org.opengauss:opengauss-jdbc:5.0.0-og",
         "artifacts": [
@@ -1316,7 +1422,7 @@
       "rustVariant": "Gaussdb",
       "singleConnectionPool": false,
       "skipTcpProbe": false,
-      "supportLevel": "experimental",
+      "supportLevel": "operate",
       "traits": {
         "schemaAware": true,
         "singleDatabase": false

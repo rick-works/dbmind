@@ -28,6 +28,7 @@ jdbc:
 traits:
   singleDatabase: false
   schemaAware: false
+# 2026-11-17 **真机**逐项验证（StarRocks 5.1.0，实验室 19030）；另加 7 项写库功能（数据传输/数据生成/数据对比/导出DDL/文件导入/行编辑/用户管理）全通过。
 supportLevel: operate
 capabilities:
   queryExecution: true

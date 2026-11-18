@@ -2821,7 +2821,11 @@ const isConnOpen = (connId) => {
  */
 const nodeOwnDb = (data) => {
   if (!data) return ''
-  if (data.kind === 'schema' && data.schema) return String(data.realDb || '') + '.' + String(data.schema)
+  // 库名可以留空（达梦，见 types/dm.js 的 hideDbLevel）：那时节点自己的库名就是模式名本身，
+  // 拼成 `.DEMO` 会与页签里的 'DEMO' 对不上（图标亮/暗、打开/关闭都要靠这个 key 相等）。
+  if (data.kind === 'schema' && data.schema) {
+    return data.realDb ? String(data.realDb) + '.' + String(data.schema) : String(data.schema)
+  }
   return String(data.db || '')
 }
 // 「已打开」名单的 key：连接 + 节点自己的库名 —— 跨连接的同名库互不影响
@@ -4086,9 +4090,13 @@ const recheckConn = async (sid) => {
   try {
     const dbList = await (isNoSqlType(c.type) ? noSqlDatabases(key) : listDatabases(key))
     const list = Array.isArray(dbList) ? dbList : []
-    // 与 selectConn 同一套「软失败」识别：后端列不出库时 200 返回占位名，不能当成功
+    // 与 selectConn 同一套「软失败」识别：后端列不出库时 200 返回占位名，不能当成功。
+    // 但**没有「库」这一层的类型**（Oracle / DM，见 hideDbLevelOf）除外：它们的库清单本来就只是
+    // 一条**隐含前缀**，达梦的 JDBC URL 里连库名都可以不填 ⇒ 后端回占位名 `(default)` 是正常结果。
+    // 按"空 = 连不上"判会把达梦节点永远挡在展开之外（真机：点箭头只弹「没有取到数据库」）。
+    // 真正的可用性由随后的模式清单证明 —— dbOrSchemaNodes 拿不到模式会弹窗 + 收起节点。
     const usable = list.filter(db => isNoSqlType(c.type) || String(db) !== NO_DEFAULT_DB)
-    if (!usable.length) {
+    if (!usable.length && !hideDbLevelOf(c.type)) {
       let why = ''
       try {
         const probe = await testConnectionById(c.id)
@@ -4177,8 +4185,10 @@ const selectConn = async (id) => {
     // （`(default)` / 本地文件的 `main` 是真名，不能算失败）。不识别的话会把
     // "连不上"当成"连接成功"，还会写进一个空缓存 —— 那正是之前"展开了却没东西"的老毛病。
     // NoSQL 的 `(default)` 是能用的伪库（key/集合挂在它下面），所以对它不设这道闸。
+    // 没有「库」这一层的类型（Oracle / DM，见 hideDbLevelOf）同理不设：达梦列不出「库」是常态
+    //（连接串里的库名可以不填），它的健康由模式清单证明（dbOrSchemaNodes 失败会弹窗 + 收节点）。
     const usable = list.filter(db => isNoSqlType(c.type) || String(db) !== NO_DEFAULT_DB)
-    if (!usable.length) {
+    if (!usable.length && !hideDbLevelOf(c.type)) {
       rollback()
       // 只有失败时才回头问一次"为什么"：正常路径省掉那次往返，失败路径仍要给出准确原因
       let why = ''
@@ -4942,7 +4952,9 @@ const schemaNodesOf = (connId, connType, database, schemas) => schemas.map((s) =
   id: 'schema:' + connId + ':' + database + ':' + s,
   label: s,
   kind: 'schema',
-  db: database + '.' + s,
+  // 库名可以留空（达梦的连接串不写库名）：这时**不要**拼出 `.DEMO` 这种前导点串 ——
+  // 裸模式名才是后端认的 `database`（见 dialect 的 db_is_schema）。
+  db: database ? database + '.' + s : String(s),
   realDb: database,
   schema: s,
   connId,
@@ -5019,39 +5031,42 @@ const calibrateSchemas = (connId, database, settled) => {
 const dbOrSchemaNodes = async (connId, connType, dbList, catalog) => {
   if (hideDbLevelOf(connType) && !catalog) {
     const list = (Array.isArray(dbList) ? dbList : []).filter((db) => String(db) !== NO_DEFAULT_DB)
-    if (list.length === 1) {
-      const database = list[0]
-      const key = schemaCacheKeyOf(connId, database)
-      // 请求照发（无论有没有缓存）：回来就落缓存（+ 校准树）
-      const settled = listSchemas(connId, database, { timeout: SCHEMA_CALL_TIMEOUT_MS }).then(
-        (v) => {
-          const arr = Array.isArray(v) ? v : []
-          if (arr.length) writeSchemaCache(key, arr)
-          return { ok: arr.length > 0, v: arr }
-        },
-        (e) => ({ ok: false, err: e })
-      )
-      // ① 持久缓存命中：**立刻**出模式清单。
-      //    这类类型（Oracle / DM）的「库」层是隐含前缀，连接节点展开后那一排模式就是要建
-      //    一次连才拿得到（Oracle 实测建连 2.4 秒、连不上要等满超时）—— 缓存让"点开"
-      //    不再每一次都付这笔钱（库/表清单早就这么做了，只有模式清单漏了）。
-      const hit = readSchemaCache(key)
-      if (hit && Array.isArray(hit.value) && hit.value.length) {
-        calibrateSchemas(connId, database, settled)
-        return schemaNodesOf(connId, connType, database, hit.value)
-      }
-      // ② 没缓存：**照实等**（箭头转圈就是"正在读"，与展开连接等库清单一致）。
-      //    这一步以前也等，但失败时会在树里写一行「未取到模式清单…」—— 用户不要那行字，
-      //    现在改成：失败 → 弹窗 + 节点收起（见 resetFailedNode），树里保持干净。
-      const first = await settled
-      if (first.ok && Array.isArray(first.v) && first.v.length) {
-        clearUnreachable(connId)
-        return schemaNodesOf(connId, connType, database, first.v)
-      }
-      reportTreeFail(connId, first.err, t('mv.schemaListFailed'))
-      resetFailedNode('conn:' + connId)
-      return []
+    // 「库」在这类类型上只是**请求前缀**（Oracle 的服务名 / PDB），而且**可以为空**：
+    // 达梦的连接串里库名可以不填，这时后端列不出库、只能回占位名 `(default)`，过滤完就是空。
+    // 不能因为空就掉到下面的 dbListToDbNodes —— 那会画出一行「未取到库清单」，
+    // 用户看到的就是「达梦节点展不开」（真机现象）。留空就按"不带库名"请求模式清单：
+    // `/schemas` 不传 database 表示当前库，模式节点仍是裸模式名（后端按 db_is_schema 认）。
+    const database = list.length ? String(list[0]) : ''
+    const key = schemaCacheKeyOf(connId, database)
+    // 请求照发（无论有没有缓存）：回来就落缓存（+ 校准树）
+    const settled = listSchemas(connId, database, { timeout: SCHEMA_CALL_TIMEOUT_MS }).then(
+      (v) => {
+        const arr = Array.isArray(v) ? v : []
+        if (arr.length) writeSchemaCache(key, arr)
+        return { ok: arr.length > 0, v: arr }
+      },
+      (e) => ({ ok: false, err: e })
+    )
+    // ① 持久缓存命中：**立刻**出模式清单。
+    //    这类类型（Oracle / DM）的「库」层是隐含前缀，连接节点展开后那一排模式就是要建
+    //    一次连才拿得到（Oracle 实测建连 2.4 秒、连不上要等满超时）—— 缓存让"点开"
+    //    不再每一次都付这笔钱（库/表清单早就这么做了，只有模式清单漏了）。
+    const hit = readSchemaCache(key)
+    if (hit && Array.isArray(hit.value) && hit.value.length) {
+      calibrateSchemas(connId, database, settled)
+      return schemaNodesOf(connId, connType, database, hit.value)
     }
+    // ② 没缓存：**照实等**（箭头转圈就是"正在读"，与展开连接等库清单一致）。
+    //    这一步以前也等，但失败时会在树里写一行「未取到模式清单…」—— 用户不要那行字，
+    //    现在改成：失败 → 弹窗 + 节点收起（见 resetFailedNode），树里保持干净。
+    const first = await settled
+    if (first.ok && Array.isArray(first.v) && first.v.length) {
+      clearUnreachable(connId)
+      return schemaNodesOf(connId, connType, database, first.v)
+    }
+    reportTreeFail(connId, first.err, t('mv.schemaListFailed'))
+    resetFailedNode('conn:' + connId)
+    return []
   }
   return await dbListToDbNodes(connId, connType, dbList, catalog)
 }
@@ -7643,17 +7658,19 @@ const resetSubtreeLoaded = (node) => {
  * 库级刷新会把同库下所有模式一起收起来（用户正看着的模式也会消失），
  * 而「刷新这一层的表」本来只需要动这一个模式。
  */
-const refreshSchemaNode = (dbFull, connId) => {
+const refreshSchemaNode = (realDb, schema, connId) => {
   const tree = treeRef.value
   const cid = connId || currentConnId.value
-  if (!tree || !cid || !dbFull) return
-  const [realDb, schema] = String(dbFull).split('.')
-  if (!schema) { refreshDbNode(realDb, cid); return }
-  // 这条缓存键就是「库.模式」这一份清单
-  removeSchemaCachesOfDb(cid, realDb + '.' + schema)
-  const node = tree.store?.nodesMap?.['schema:' + cid + ':' + realDb + ':' + schema]
+  const db = String(realDb || '')
+  const sch = String(schema || '')
+  if (!tree || !cid || !sch) return
+  // 模式节点的库标识：有库层时是「库.模式」，没有库层（Oracle / DM，达梦连库名都可以不填）时就是模式名
+  const dbFull = db ? db + '.' + sch : sch
+  // 这条缓存键就是该模式那一份表/视图清单
+  removeSchemaCachesOfDb(cid, dbFull)
+  const node = tree.store?.nodesMap?.['schema:' + cid + ':' + db + ':' + sch]
   // 模式节点还没建出来（没展开过库）：退回整库刷新，别让「刷新」变成无声无息
-  if (!node) { refreshDbNode(realDb, cid); return }
+  if (!node) { if (db) refreshDbNode(db, cid); return }
   if (!node.loaded) return
   resetSubtreeLoaded(node)
   node.loadData(() => { reapplyTreeFilter() })
@@ -8904,9 +8921,9 @@ const dbCtxRefresh = () => {
   if (!d) return
   closeTreeCtxMenu()
   // 模式节点的右键菜单复用的是「库」那一套，但动作必须只作用在这个模式上：
-  // 菜单里的 d.db 已经被换成 realDb（库名），完整的「库.模式」要从 realDb + schema 拼回来
+  // 菜单里的 d.db 已经被换成库名，而节点 id 里那段是 `realDb`（没有库层时是空串，见 dbOrSchemaNodes）
   if (d.kind === 'schema' && d.schema) {
-    refreshSchemaNode((d.realDb || d.db) + '.' + d.schema, d.connId)
+    refreshSchemaNode(d.realDb || '', d.schema, d.connId)
     return
   }
   refreshDbNode(d.db, d.connId)

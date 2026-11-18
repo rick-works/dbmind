@@ -1,8 +1,6 @@
 schemaVersion: 1
-# 同族批量注册：这一批类型的共同点是**协议与语法层兼容已有族**，
+# 同族注册：这一批类型的共同点是**协议与语法层兼容已有族**，
 # 所以方言分支、模块路由、驱动目录全部复用同族那一套，内核与前端都没有为它们加代码。
-# 代价是「没在真机上逐项验证」——因此 supportLevel 统一标 experimental，
-# 界面会显示「实验」徽章并在连接框里说明，避免被当成已完整支持。
 order: 410
 dbType: greatsql
 rustVariant: Greatsql
@@ -29,7 +27,8 @@ jdbc:
 traits:
   singleDatabase: false
   schemaAware: false
-supportLevel: experimental
+# 2026-11-17 **真机**逐项验证（GreatSQL 8.0.32-24，实验室 3308）；另加 7 项写库功能（数据传输/数据生成/数据对比/导出DDL/文件导入/行编辑/用户管理）全通过。
+supportLevel: operate
 capabilities:
   queryExecution: true
   metadataBrowse: true

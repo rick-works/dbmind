@@ -361,7 +361,21 @@ fn validate_compare_keys(
     if selected.len() != keys.len() {
         return Err(XError::bad_request("比对键不能重复"));
     }
-    if source_pk.is_empty() || selected != source_pk || selected != target_pk {
+    // 两侧**都**读不到主键 ⇒ 仍然拒绝：没有唯一键就无法把两边的行对齐，
+    // 比出来的差异是假的（这条纪律由 key_validation_tests 守着）。
+    // 但「只有一侧读不到」是另一回事：Doris / StarRocks / SelectDB 的 UNIQUE / PRIMARY KEY
+    // 表在 JDBC 元数据里根本不报主键（2026-11-17 实测：源 MySQL 主键 [id]、目标主键 []），
+    // 原来只要有一侧为空就拒绝 ⇒ 这三家的数据对比永远用不了。
+    // 这种情况信用户选的键，能读到主键的那一侧仍要求严格相等。
+    let source_known = !source_pk.is_empty();
+    let target_known = !target_pk.is_empty();
+    if !source_known && !target_known {
+        return Err(XError::bad_request(
+            "两侧都没有主键信息：无法确定用哪些列对齐行，数据对比不支持\
+             （可以改用表结构对比，或先给表加上主键）",
+        ));
+    }
+    if (source_known && selected != source_pk) || (target_known && selected != target_pk) {
         return Err(XError::bad_request(format!(
             "比对键必须完整等于两侧主键。源主键 [{}]，目标主键 [{}]，当前选择 [{}]",
             source_pk.into_iter().collect::<Vec<_>>().join(", "),
@@ -684,15 +698,20 @@ async fn table_foreign_key_signatures(
                 .filter(|name| !name.is_empty())
                 .map(|name| format!(" and n.nspname = {}", dialect.literal(name)))
                 .unwrap_or_default();
-            (
-                Some(format!(
-                    "select pg_get_constraintdef(c.oid) as definition \
-                     from pg_constraint c join pg_class r on r.oid = c.conrelid \
-                     join pg_namespace n on n.oid = r.relnamespace \
-                     where c.contype = 'f' and r.relname = {table_lit}{schema_filter}"
-                )),
-                true,
-            )
+            let sql = format!(
+                "select pg_get_constraintdef(c.oid) as definition \
+                 from pg_constraint c join pg_class r on r.oid = c.conrelid \
+                 join pg_namespace n on n.oid = r.relnamespace \
+                 where c.contype = 'f' and r.relname = {table_lit}{schema_filter}"
+            );
+            // 金仓的系统目录是 sys_*（**没有** pg_catalog 兼容层），整条要改名；
+            // 取不到外键原本只是「差异里少一项约束说明」，改名后才是真的能取到
+            let sql = if dialect.kind.key() == "kingbase" {
+                crate::api::dialect_ops::kb_catalog_sql(&sql)
+            } else {
+                sql
+            };
+            (Some(sql), true)
         }
         "mysql" | "mariadb" | "tidb" | "oceanbase" => {
             let schema_lit = dialect.literal(

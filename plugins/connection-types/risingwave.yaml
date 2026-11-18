@@ -1,0 +1,52 @@
+schemaVersion: 1
+order: 1220
+dbType: risingwave
+rustVariant: Risingwave
+label: RisingWave
+dialect: PostgreSQL
+runtimeMode: agent
+mcpMode: bridge
+agentKey: postgresql
+driverStoreVisible: true
+driverStoreOrder: 25
+singleConnectionPool: false
+metadataConnectionScoped: false
+# 流式数据库：写入侧要持续灌流，读侧并发查询多 ⇒ 与 PG 同档。
+maxConnections: 8
+skipTcpProbe: false
+localFile: false
+# RisingWave 的 PG wire 端口固定 4566（dashboard 是 5691）
+defaultPort: 4566
+jdbc:
+  driverClass: org.postgresql.Driver
+  # 与 postgresql 同一条模板（同一个驱动）：RW 兼容 PG 协议
+  urlTemplate: "jdbc:postgresql://{host}:{port}/{database}?sslmode=prefer&reWriteBatchedInserts=true&stringtype=unspecified&tcpKeepAlive=true"
+  artifact: org.postgresql:postgresql:42.7.4
+traits:
+  singleDatabase: false
+  schemaAware: true
+# 2026-11-17 **真机验证**：实验机 lab-risingwave（standalone，4566 → 宿主 4567，用户 root、默认库 dev）。
+# 服务端自报 PostgreSQL 13.14.0，PG 42.7.4 驱动直接可用。
+# 巡检 21/23，两处「不支持」是**设计如此**（不是坏）：
+#   · 库级统计 stats → 501（RW 没有 pg_database_size / has_table_privilege）
+#   · 用户详情 user-info → 明确回「尚未接入」（RW 没有 information_schema.table_privileges）
+# 另：RW 的 pg_class 里**没有 reltuples 列**，表清单/表选项改走不查行数的写法
+#     （见 dialect.rs 的 risingwave_pg_subset 分支），行数由前端 COUNT(*) 回填。
+supportLevel: operate
+capabilities:
+  queryExecution: true
+  metadataBrowse: true
+  objectBrowser: true
+  objectSource: true
+  schemaSearch: true
+  diagram: false
+  tableDataEdit: false
+  tableStructureEdit: false
+  tableImport: false
+  dataTransfer: true
+  sqlFileExecution: true
+  databaseCreate: true
+  fieldLineage: false
+  sqlExplain: true
+  userAdmin: false
+  driverManagement: true

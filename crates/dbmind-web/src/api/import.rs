@@ -132,14 +132,7 @@ pub async fn start(
                 .join(", ");
 
             if mode == "create" {
-                let columns: Vec<String> = columns
-                    .iter()
-                    .map(|name| format!("{} text", dialect.quote(name)))
-                    .collect();
-                let ddl = format!(
-                    "create table if not exists {target_name} ({})",
-                    columns.join(", ")
-                );
+                let ddl = create_from_csv_sql(&dialect, &target_name, &columns);
                 task.step(format!("建表（若不存在）：{table}"));
                 run_sql(&state, &id, &database, &ddl)
                     .await
@@ -277,16 +270,56 @@ fn supports_multi_row(dialect: Dialect) -> bool {
         dialect.kind.key(),
         "mysql"
             | "mariadb"
+            | "greatsql"
+            | "goldendb"
             | "doris"
+            | "starrocks"
+            | "selectdb"
             | "tidb"
             | "oceanbase"
             | "postgresql"
             | "kingbase"
             | "opengauss"
+            | "highgo"
+            | "vastbase"
+            | "uxdb"
+            | "gaussdb"
             | "sqlite"
             | "sqlserver"
             | "h2"
             | "clickhouse"
+    )
+}
+
+/// 「导入时自动建表」的 DDL。
+///
+/// 通用方言：所有列建成 `text`（导入只做文本搬运，类型交给用户事后改）。
+/// **Doris / StarRocks / SelectDB 不能这样建**：它们要求 OLAP 表是 KEY 模型，且
+/// **第一列不能是 STRING**（2026-11-17 真机：`The olap table first column could not be
+/// float, double, string or array, struct, map, please use decimal or varchar instead.`）。
+/// 所以第一列落成 `varchar(64)` 并当 KEY，其余仍是 `text`，再补齐 `DISTRIBUTED` 与
+/// `replication_num`（单 BE 集群默认 3 会直接报错）。KEY 子句与建表保持同一套口径：
+/// StarRocks 用 PRIMARY KEY（它的 UNIQUE KEY 表不支持 UPDATE），其余用 UNIQUE KEY。
+fn create_from_csv_sql(dialect: &Dialect, table: &str, columns: &[String]) -> String {
+    let quoted: Vec<String> = columns.iter().map(|name| dialect.quote(name)).collect();
+    let key = dialect.kind.key();
+    let doris_family = matches!(key, "doris" | "starrocks" | "selectdb");
+    if !doris_family || quoted.is_empty() {
+        let cols: Vec<String> = quoted.iter().map(|q| format!("{q} text")).collect();
+        return format!("create table if not exists {table} ({})", cols.join(", "));
+    }
+    let first = &quoted[0];
+    let mut cols = vec![format!("{first} varchar(64)")];
+    cols.extend(quoted.iter().skip(1).map(|q| format!("{q} text")));
+    let clause = if key == "starrocks" {
+        "PRIMARY KEY"
+    } else {
+        "UNIQUE KEY"
+    };
+    format!(
+        "create table if not exists {table} (\n{}\n)\n{clause}({first})\n\
+         DISTRIBUTED BY HASH({first}) BUCKETS 1\nPROPERTIES(\"replication_num\" = \"1\")",
+        cols.join(",\n")
     )
 }
 

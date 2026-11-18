@@ -965,7 +965,24 @@ impl Dialect {
     ///
     /// 各家系统表差别很大，**只写有把握的**：SQL Server / MySQL / PostgreSQL。
     /// 其余返回 `Unwritten` —— 用户管理涉及权限，猜错的代价比不显示大得多。
+    /// StarRocks 的用户模型与 MySQL **对不上**，相关目录一律按「没有这个概念」处理。
+    ///
+    /// 两条实测依据（StarRocks 5.1）：
+    /// · 它没有 `mysql` 库，`select … from mysql.user` 直接报 `Unknown database 'mysql'`
+    ///   —— 也就是 Doris 那套用户清单在这里必然 500；
+    /// · `show users` 只给一行 `'root'@'%'` 字符串，权限要读 `show grants` 的文本，
+    ///   而 StarRocks 是**角色授予**的 RBAC（`GRANT 'role' TO 'user'`），没有 MySQL 的
+    ///   对象级权限矩阵 —— 硬套会画出一张勾不对的勾选表，比"没有入口"更误导。
+    ///
+    /// Doris 不受影响：它有 `mysql.user`，继续走 MySQL 那套。
+    fn starrocks_rbac_only(&self) -> bool {
+        self.kind.key() == "starrocks"
+    }
+
     pub fn user_info(&self, name: &str) -> Meta {
+        if self.starrocks_rbac_only() {
+            return Meta::Absent;
+        }
         self.ops().user_info(name)
     }
 
@@ -983,6 +1000,9 @@ impl Dialect {
     /// 已知覆盖：**静态**权限。8.0 的动态权限（`mysql.global_grants`）与角色授予
     /// 不在这三张视图里，需要时按 `role_edges` 另补（5.7 没有那张表，先不引用）。
     pub fn user_grants(&self, user: &str, host: &str) -> Meta {
+        if self.starrocks_rbac_only() {
+            return Meta::Absent;
+        }
         self.ops().user_grants(user, host)
     }
 
@@ -996,6 +1016,9 @@ impl Dialect {
     /// 所以 role_host 一律回空串，界面按裸名字显示。
     /// Doris 的 RBAC 没有这两张表（返回 Unwritten，界面就不出角色这一页）。
     pub fn user_roles(&self, user: &str, host: &str) -> Meta {
+        if self.starrocks_rbac_only() {
+            return Meta::Absent;
+        }
         self.ops().user_roles(user, host)
     }
 
@@ -1013,15 +1036,24 @@ impl Dialect {
     /// ClickHouse 的 `system.roles`、Doris 的 `SHOW ROLES`），所以不能拿
     /// `user_info` 硬查 —— 查不到就是"没有找到用户"，角色页永远打不开。
     pub fn role_info(&self, name: &str) -> Meta {
+        if self.starrocks_rbac_only() {
+            return Meta::Absent;
+        }
         self.ops().role_info(name)
     }
 
     /// 角色**自身拥有**的权限（与 `user_grants` 同形状：scope/privilege/owner/db_name/table_name/grant_option）。
     pub fn role_grants(&self, name: &str, host: &str) -> Meta {
+        if self.starrocks_rbac_only() {
+            return Meta::Absent;
+        }
         self.ops().role_grants(name, host)
     }
 
     pub fn role_inventory(&self) -> Meta {
+        if self.starrocks_rbac_only() {
+            return Meta::Absent;
+        }
         self.ops().role_inventory()
     }
 
@@ -1040,6 +1072,11 @@ impl Dialect {
         reset_privileges: bool,
         attrs: &UserAttrs,
     ) -> Meta {
+        // StarRocks 的用户体系是角色 RBAC（见 starrocks_rbac_only 的注释），
+        // 不产出 MySQL 形状的建/改/删语句 —— 界面上也不会有入口进来。
+        if self.starrocks_rbac_only() {
+            return Meta::Absent;
+        }
         // **角色**的保存（`alter-role`）：只出差量授权，不出 `alter user`。
         // 角色没有口令 / 锁定 / 配额这些属性，前端在角色模式也不会交它们，
         // 所以把 action 归一成 alter 即可 —— 属性为空时各分支不会拼 alter 语句。
@@ -1184,6 +1221,9 @@ impl Dialect {
     }
 
     pub fn users(&self) -> Meta {
+        if self.starrocks_rbac_only() {
+            return Meta::Absent;
+        }
         self.ops().users()
     }
 
@@ -1324,7 +1364,33 @@ impl Dialect {
     /// 统计行数。表引用走 [`Self::quote_exact`] —— 调用方传的都来自目录元数据
     /// （树里的表名），用 `quote()` 会把 Oracle 上带引号建的小写表折成大写、报 ORA-00942。
     pub fn count_sql(&self, table: &str) -> String {
-        format!("select count(*) as cnt from {}", self.quote_exact(table))
+        self.count_sql_in(None, table)
+    }
+
+    /// 同 [`Self::count_sql`]，但**带模式**（`db_is_schema` 的方言必须用这个，见 [`Self::table_ref`]）。
+    pub fn count_sql_in(&self, schema: Option<&str>, table: &str) -> String {
+        format!("select count(*) as cnt from {}", self.table_ref(schema, table))
+    }
+
+    /// 表 / 视图引用：`select … from`、`insert into`、`update`、`delete from` 后面那一段。
+    ///
+    /// 两件事：
+    /// 1. 名字**逐字加引号**（来自目录元数据，不能折大小写，见 [`Self::quote_exact`]）；
+    /// 2. **`db_is_schema` 的方言（Oracle / DM）必须补模式前缀** —— 它们没有可切的会话模式
+    ///    （`run_sql_in` 切 schema 在达梦上不生效，见 oracle.rs 的 `dm_owner_probe` 注释），
+    ///    不带前缀就按登录用户的默认模式解析。真机：达梦 `database=DEMO` 时
+    ///    `select * from "USERS"` 报「无效的表或视图名[USERS]」，`"DEMO"."USERS"` 才正常。
+    ///
+    /// 其余方言只用表名：目标库由影子连接 / `use [库]` / search_path 决定，多补一段可能指错。
+    pub fn table_ref(&self, schema: Option<&str>, table: &str) -> String {
+        let table = table.trim();
+        if table.is_empty() || table.contains('.') {
+            return self.quote_exact(table);
+        }
+        match schema.map(str::trim).filter(|name| !name.is_empty()) {
+            Some(schema) if self.db_is_schema() => self.quote_exact(&format!("{schema}.{table}")),
+            _ => self.quote_exact(table),
+        }
     }
 
     /// 按列元数据拼 `CREATE TABLE`。

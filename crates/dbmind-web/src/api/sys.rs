@@ -35,7 +35,7 @@ fn category_of(descriptor: &dbmind_core::TypeDescriptor) -> &'static str {
         // 没有事务、没有外键和二级索引，混在「关系型数据库」里会让人当成 MySQL 那样用。
         _ if matches!(
             descriptor.key,
-            "clickhouse" | "doris" | "starrocks" | "selectdb"
+            "clickhouse" | "doris" | "starrocks" | "selectdb" | "databend" | "risingwave"
         ) =>
         {
             "OLAP"

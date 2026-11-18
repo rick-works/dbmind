@@ -385,11 +385,15 @@ impl DialectOps for DmOps {
             "view" => Meta::Sql(format!(
                 "select dbms_metadata.get_ddl('VIEW', upper({name_literal})) as definition from dual"
             )),
-            "procedure" => Meta::Sql(format!(
-                "select dbms_metadata.get_ddl('PROCEDURE', upper({name_literal})) as definition from dual"
-            )),
-            "function" => Meta::Sql(format!(
-                "select dbms_metadata.get_ddl('FUNCTION', upper({name_literal})) as definition from dual"
+            // DM 的 `dbms_metadata.get_ddl` 在只读会话里直接报
+            // `-6506 试图在只读事务中修改数据`（内部要建临时表），所以例程改走数据字典：
+            // 达梦 `all_source.type` 是 **PROC**（实测 distinct 只有 PACKAGE / PACKAGE BODY /
+            // PROC / TYPE / CLASS / CLASS BODY，没有 PROCEDURE），listagg + chr(10) 能拼回
+            // 完整的 `CREATE OR REPLACE PROCEDURE …`；函数与存储过程共用同一条。
+            "procedure" | "function" => Meta::Sql(format!(
+                "select listagg(text || chr(10), '') within group (order by line) as definition \
+                 from all_source where name = upper({name_literal}) \
+                   and type in ('PROC', 'PROCEDURE', 'FUNCTION')"
             )),
             "trigger" => Meta::Sql(format!(
                 "select dbms_metadata.get_ddl('TRIGGER', upper({name_literal})) as definition from dual"
@@ -410,25 +414,31 @@ impl DialectOps for DmOps {
     }
 
     fn ddl(&self, table: &str, schema: Option<&str>) -> Meta {
-        let _ = schema;
         let lit = self.literal(table);
-        // Oracle/DM 通用兜底：手工拼列（listagg）+ 视图原文（user_views.text 两家都有）
+        // 有 schema 就用它，没有才探测 owner（`user_*` 只认会话当前模式，
+        // 而达梦上 run_sql_in 切 schema 不生效 —— 真机：database=DEMO 时 current_schema 仍是 SYSDBA）
+        let owner = match schema.map(str::trim).filter(|name| !name.is_empty()) {
+            Some(schema) => format!("upper({})", self.literal(schema)),
+            None => dm_owner_probe(&lit),
+        };
+        // 达梦的数据字典与 Oracle 同名，但**类型名不同**（INT/VARCHAR/DECIMAL/TIMESTAMP），
+        // 所以长度精度按小写类型名判断，不能用 Oracle 那套 `data_type = 'NUMBER'`。
         Meta::Sql(format!(
             "select 'create or replace view ' || lower(view_name) || ' as' || chr(10) || text as ddl \
-         from user_views where view_name = upper({lit}) \
+         from all_views where view_name = upper({lit}) and owner = {owner} \
          union all \
          select 'create table ' || lower(table_name) || ' (' || chr(10) || \
          listagg('  ' || lower(column_name) || ' ' || \
            case \
-             when data_type = 'NUMBER' and data_precision is not null \
-               then 'number(' || data_precision || coalesce(',' || data_scale, '') || ')' \
-             when data_type in ('VARCHAR2','NVARCHAR2','CHAR','NCHAR') \
+             when lower(data_type) in ('number','decimal','numeric') and data_precision is not null \
+               then lower(data_type) || '(' || data_precision || coalesce(',' || data_scale, '') || ')' \
+             when lower(data_type) in ('varchar','varchar2','nvarchar','nvarchar2','char','nchar') \
                then lower(data_type) || '(' || data_length || ')' \
              else lower(data_type) \
            end || \
            case when nullable = 'N' then ' not null' else '' end, ',' || chr(10)) \
            within group (order by column_id) || chr(10) || ');' as ddl \
-         from user_tab_columns where table_name = upper({lit}) \
+         from all_tab_columns where table_name = upper({lit}) and owner = {owner} \
          group by table_name"
         ))
     }
@@ -441,20 +451,69 @@ impl DialectOps for DmOps {
         oracle_user_info(self, name)
     }
 
-    fn procedures(&self, _schema: Option<&str>) -> Meta {
-        dm_procedures()
+    fn procedures(&self, schema: Option<&str>) -> Meta {
+        dm_procedures(self, schema)
     }
 
-    fn triggers(&self, _schema: Option<&str>) -> Meta {
-        dm_triggers()
+    fn triggers(&self, schema: Option<&str>) -> Meta {
+        dm_triggers(self, schema)
     }
 
     fn table_options_sql(&self, _database: &str) -> Option<String> {
         Some(dm_table_options())
     }
 
+    // ---- 以下与 Oracle 同名、且已在达梦真机上核对过的部分（2026-11-17） ----
+    // 真机结论：`all_users` 5 行、`sys_context('USERENV','CURRENT_SCHEMA')` 返回 SYSDBA、
+    // `all_tables` / `all_views` / `all_tab_comments` / `user_col_comments` 全可用。
+    // 漏了这几个方法的代价是**树是残的**：没有模式层（is_schema_aware 默认 false）、
+    // 表清单退回 JDBC 全库系统表、`/schemas` 直接返回空数组（真机实测）。
+    fn schemas_sql(&self) -> Option<&'static str> {
+        Some(ORACLE_SCHEMAS)
+    }
+
+    fn tables_in_schema_sql(&self, schema: &str) -> Option<String> {
+        Some(oracle_tables_in_schema(self, schema))
+    }
+
+    fn is_schema_aware(&self) -> bool {
+        true
+    }
+
+    fn db_is_schema(&self) -> bool {
+        // 达梦与 Oracle 一样没有独立的「库」：树上的第一层就是模式
+        true
+    }
+
+    fn wrap_paging(&self, base: &str, offset: u64, size: u64) -> Option<String> {
+        // 达梦的 `offset … fetch` 支持面不稳（Oracle 11g 那一代就不认），统一用 ROWNUM 包
+        let end = offset.saturating_add(size);
+        Some(format!(
+            "select * from (select a__.*, rownum rn__ from (\n{base}\n) a__ where rownum <= {end}) where rn__ > {offset}"
+        ))
+    }
+
+    fn user_grants(&self, user: &str, _host: &str) -> Meta {
+        oracle_user_grants(self, user)
+    }
+
+    fn role_info(&self, name: &str) -> Meta {
+        oracle_role_info(self, name)
+    }
+
+    fn role_grants(&self, name: &str, _host: &str) -> Meta {
+        oracle_role_grants(self, name)
+    }
+
+    fn role_inventory(&self) -> Meta {
+        // 达梦的 `dba_roles` 没有 Oracle 12c 的 `oracle_maintained` 列
+        //（真机：`无效的列名[ORACLE_MAINTAINED]`），角色清单直接给全量
+        Meta::Sql("select role as role_name, '' as role_host from dba_roles".to_string())
+    }
+
     fn indexes_sql(&self) -> Option<&'static str> {
-        Some(ORACLE_INDEXES)
+        // `user_indexes` 只认会话当前模式，跨模式浏览时整段为空 ⇒ 走 all_indexes
+        Some(DM_INDEXES)
     }
 
     fn upsert_sql(
@@ -480,26 +539,30 @@ impl DialectOps for DmOps {
         Meta::Sql(format!(
             "select c.column_name as column_name, \
              case \
-               when c.data_type = 'NUMBER' and c.data_precision is not null \
-                 then 'number(' || c.data_precision || coalesce(',' || c.data_scale, '') || ')' \
-               when c.data_type in ('VARCHAR2', 'NVARCHAR2', 'CHAR', 'NCHAR') \
+               when lower(c.data_type) in ('number','decimal','numeric') and c.data_precision is not null \
+                 then lower(c.data_type) || '(' || c.data_precision || coalesce(',' || c.data_scale, '') || ')' \
+               when lower(c.data_type) in ('varchar','varchar2','nvarchar','nvarchar2','char','nchar') \
                  then lower(c.data_type) || '(' || c.data_length || ')' \
                else lower(c.data_type) \
              end as type_text, \
-             coalesce((select cc.comments from user_col_comments cc \
-                       where cc.table_name = c.table_name \
+             coalesce((select cc.comments from all_col_comments cc \
+                       where cc.owner = c.owner and cc.table_name = c.table_name \
                          and cc.column_name = c.column_name), '') as \"comment\" \
-             from user_tab_columns c where c.table_name = upper({quoted})"
+             from all_tab_columns c \
+             where c.table_name = upper({quoted}) and c.owner = {owner}",
+            owner = dm_owner_probe(quoted)
         ))
     }
     fn database_stats_sql(&self) -> Option<&'static str> {
         Some(oracle_database_stats())
     }
     fn table_comments_sql(&self, quoted: &str) -> Meta {
-        // 达梦与 Oracle 同一套数据字典，`comment` 同样要加双引号
+        // 达梦与 Oracle 同一套数据字典，`comment` 同样要加双引号；
+        // 走 `all_col_comments` + owner（`user_*` 只认会话当前模式，见 dm_owner_probe）
         Meta::Sql(format!(
             "select column_name as column_name, coalesce(comments, '') as \"comment\" \
-             from user_col_comments where table_name = upper({quoted})"
+             from all_col_comments where table_name = upper({quoted}) and owner = {owner}",
+            owner = dm_owner_probe(quoted)
         ))
     }
     fn folds_ident_upper(&self) -> bool {
@@ -630,6 +693,41 @@ const ORACLE_INDEXES: &str = "select i.index_name as \"name\", i.table_name as \
      group by i.index_name, i.table_name, i.uniqueness, i.index_type \
      order by i.table_name, i.index_name";
 
+/// 达梦的索引清单。
+///
+/// `user_indexes` 只认**会话当前模式**，而达梦上 schema 切换不生效（见 [`dm_owner_probe`]），
+/// 所以跨模式浏览时「索引」页签恒空。改走 `all_indexes`，过滤掉系统模式；
+/// 前端按 `table` 列筛当前表。`columns` 可能为 null（CLUSTER 索引没有列清单）。
+/// 注意 `all_ind_columns` 的所有者列叫 **`index_owner`**，没有 `owner`（真机踩过）。
+const DM_INDEXES: &str = "select i.owner as \"schema\", i.index_name as \"name\", \
+     i.table_name as \"table\", \
+     case when i.uniqueness = 'UNIQUE' then 1 else 0 end as \"isUnique\", \
+     i.index_type as \"type\", \
+     listagg(c.column_name, ',') within group (order by c.column_position) as \"columns\" \
+     from all_indexes i \
+     left join all_ind_columns c on c.index_owner = i.owner and c.index_name = i.index_name \
+     where upper(i.owner) not in ('SYS','SYSAUDITOR','SYSSSO') \
+     group by i.owner, i.index_name, i.table_name, i.uniqueness, i.index_type \
+     order by i.owner, i.table_name, i.index_name";
+
+/// 达梦：按表名探测 owner（优先会话当前模式）。
+///
+/// 为什么需要：达梦的 `user_*` 视图只看**会话当前模式**，而 `run_sql_in` 的 schema 切换
+/// 对达梦不生效（真机：`database=DEMO` 时 `current_schema()` 仍是 `SYSDBA`）。
+/// 做多模式浏览时 `user_tab_columns` / `user_col_comments` / `user_views` 全是空，
+/// 表现是「表能列出来、点开表结构/DDL 全空」。换成 `all_*` 就必须给 owner，
+/// 而这几条 SQL 的签名里没有模式名，于是按表名探测：当前模式优先，否则取字母序第一个。
+fn dm_owner_probe(quoted: &str) -> String {
+    format!(
+        "(select owner from (select owner from (\
+           select owner from all_tables where table_name = upper({quoted}) \
+           union all \
+           select owner from all_views where view_name = upper({quoted})) \
+         order by case when owner = sys_context('USERENV','CURRENT_SCHEMA') then 0 else 1 end, owner) \
+         where rownum = 1)"
+    )
+}
+
 // ==================== Oracle 族：schema / 表 / 例程 / 触发器 ====================
 
 /// Oracle 的「库」那层是服务名 / PDB，表实际挂在**用户（schema）**下面 —— 树里列
@@ -694,22 +792,45 @@ fn oracle_triggers(ops: &dyn DialectOps, schema: Option<&str>) -> Meta {
     }
 }
 
-/// DM（达梦）这里**不动**：它的数据字典大小写跟 Oracle 不完全一致，没在真机上验证过
-/// owner 过滤，宁可不改，也不要造一个「看着像修好了」的改动。
-fn dm_procedures() -> Meta {
-    Meta::Sql(
-        "select object_name as \"name\", object_type as \"routineType\" from user_objects \
-         where object_type in ('PROCEDURE','FUNCTION') order by object_name"
-            .to_string(),
-    )
+/// 达梦的例程清单：**必须按模式过滤**。
+///
+/// 以前用 `user_objects`：它只认会话当前模式，而达梦上 `run_sql_in` 切 schema 不生效
+/// （见 [`dm_owner_probe`]）—— 树上点 DEMO 列出来的是 SYSDBA 名下的一堆系统过程
+/// （SP_ARCH_BAKSET_REMOVE_BATCH / SP_DROP_CONS_AND_OBJ_REFS_WHEN_DROP_SCHEMA…），
+/// 用户看到的就是「这个模式里怎么全是系统过程」。
+///
+/// 2026-11-18 真机核对过（DM8 / 127 容器）：`all_objects` + `upper(owner) = upper('DEMO')`
+/// 正常返回（DEMO 模式 0 个例程），`all_triggers` 同样可用 —— 与 Oracle 那套的唯一差别是
+/// 达梦字典里 owner 一律大写，所以两边都 upper()。
+fn dm_procedures(ops: &dyn DialectOps, schema: Option<&str>) -> Meta {
+    match schema.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(schema) => Meta::Sql(format!(
+            "select object_name as \"name\", object_type as \"routineType\" from all_objects \
+             where object_type in ('PROCEDURE','FUNCTION') and upper(owner) = upper({}) \
+             order by object_name",
+            ops.literal(schema)
+        )),
+        None => Meta::Sql(
+            "select object_name as \"name\", object_type as \"routineType\" from user_objects \
+             where object_type in ('PROCEDURE','FUNCTION') order by object_name"
+                .to_string(),
+        ),
+    }
 }
 
-fn dm_triggers() -> Meta {
-    Meta::Sql(
-        "select trigger_name as \"name\", table_name as \"table\" from user_triggers \
-         order by trigger_name"
-            .to_string(),
-    )
+fn dm_triggers(ops: &dyn DialectOps, schema: Option<&str>) -> Meta {
+    match schema.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(schema) => Meta::Sql(format!(
+            "select trigger_name as \"name\", table_name as \"table\" from all_triggers \
+             where upper(owner) = upper({}) order by trigger_name",
+            ops.literal(schema)
+        )),
+        None => Meta::Sql(
+            "select trigger_name as \"name\", table_name as \"table\" from user_triggers \
+             order by trigger_name"
+                .to_string(),
+        ),
+    }
 }
 
 // ==================== Oracle 族：用户 / 权限 / 角色 ====================

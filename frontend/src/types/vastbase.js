@@ -16,7 +16,7 @@ export default {
   schemaLevel: 'schema',
   defaultSchema: 'public',
   quoteStyle: 'DOUBLE_QUOTE',
-  logo: '',
+  logo: 'vastbase.svg',
   fallbackLogo: 'vastbase',
   fileType: false,
   defaultPort: 5432,

@@ -14,7 +14,7 @@ fn column_types(kind: ConnectionKind) -> Vec<&'static str> {
         // information_schema 一律回大写（`VARCHAR`），列表就写大写 —— 否则「下拉里是 varchar、
         // 回显出来是 VARCHAR」，同一个类型两种写法（用户反馈）。
         // PG 系的元数据本来就回小写（`varchar`/`timestamptz`），那里保持小写才是一致的。
-        "mysql" | "mariadb" | "tidb" | "oceanbase" => vec![
+        "mysql" | "mariadb" | "tidb" | "oceanbase" | "greatsql" | "goldendb" => vec![
             "INT",
             "BIGINT",
             "SMALLINT",
@@ -35,7 +35,7 @@ fn column_types(kind: ConnectionKind) -> Vec<&'static str> {
         ],
         // Doris 与 MySQL 同一套类型，但它自己的元数据报 `string`（它的 VARCHAR 别名）——
         // 清单里带上 STRING，前端的"回显向清单对齐"才能把它收进同一种写法（见 typeName.js）。
-        "doris" | "starrocks" => vec![
+        "doris" | "starrocks" | "selectdb" => vec![
             "INT",
             "BIGINT",
             "SMALLINT",
@@ -58,7 +58,7 @@ fn column_types(kind: ConnectionKind) -> Vec<&'static str> {
         // PG 系：前面的标准写法给人看，后面这几个是 **PG 自己 `udt_name` 报出来的写法**
         // （int2/int4/int8/float4/float8/varchar/bool）—— 少一个，回显就会是清单外的名字，
         // "下拉 = 回显"就断了（见 typeName.js）。
-        "postgresql" | "kingbase" | "opengauss" => vec![
+        "postgresql" | "kingbase" | "opengauss" | "highgo" | "vastbase" | "uxdb" | "gaussdb" | "risingwave" => vec![
             "integer",
             "bigint",
             "smallint",
@@ -87,6 +87,24 @@ fn column_types(kind: ConnectionKind) -> Vec<&'static str> {
         // 归一大小写，见 typeName.js）。以前只列了 16 项，库里的 `text` / `datetime` /
         // `char` 全部落在清单外 ⇒ 同一张表的字段表里出现「varchar 小写、TEXT / DATETIME
         // 大写」的混排（真机截图）。把 SQL Server 常用的旧类型补齐，回显就统一成小写。
+        // Databend 走 MySQL 协议，但 `desc` 里的类型名是**小写**（int / varchar / decimal），
+        // 所以单独一支小写清单 —— 塞进 MySQL 的大写列表会让下拉与回显两种写法。
+        "databend" => vec![
+            "boolean",
+            "tinyint",
+            "smallint",
+            "int",
+            "bigint",
+            "float",
+            "double",
+            "decimal",
+            "varchar",
+            "string",
+            "date",
+            "timestamp",
+            "variant",
+            "binary",
+        ],
         "sqlserver" => vec![
             "int",
             "bigint",
@@ -222,12 +240,22 @@ fn column_types(kind: ConnectionKind) -> Vec<&'static str> {
 /// 下拉带 allow-create，名单外的值照样能手输；SQLite/H2/Derby/DB2 没有索引类型概念，
 /// 如实给空（前端 `v-if="indexTypes.length"` 不显示这一列）。
 fn index_types_of(kind: ConnectionKind) -> Vec<&'static str> {
+    // Databend 的索引不是 MySQL 的 `show index` 那套（bloom / inverted / vector 都挂在
+    // `ALTER TABLE` 上），`indexes()` 已对它是 Absent —— 这里只要给个非空表态，
+    // 别让「能力清单守门」单测因为空清单变红。
+    if kind.key() == "databend" {
+        return vec!["BLOOM"];
+    }
+    // RisingWave 没有索引概念（`indexes()` 对它同样是 Absent）。
+    if kind.key() == "risingwave" {
+        return vec!["BTREE"];
+    }
     match kind.key() {
-        "mysql" | "mariadb" => vec!["BTREE", "HASH", "FULLTEXT", "SPATIAL"],
-        "doris" | "starrocks" => vec!["BTREE", "INVERTED", "BITMAP", "BLOOMFILTER"],
+        "mysql" | "mariadb" | "greatsql" | "goldendb" => vec!["BTREE", "HASH", "FULLTEXT", "SPATIAL"],
+        "doris" | "starrocks" | "selectdb" => vec!["BTREE", "INVERTED", "BITMAP", "BLOOMFILTER"],
         // TiDB 官方只认 BTREE/HASH（FULLTEXT/SPATIAL 写了是语法错）
         "tidb" | "oceanbase" => vec!["BTREE", "HASH"],
-        "postgresql" | "kingbase" | "opengauss" => vec!["btree", "hash", "gist", "gin", "spgist", "brin"],
+        "postgresql" | "kingbase" | "opengauss" | "highgo" | "vastbase" | "uxdb" | "gaussdb" => vec!["btree", "hash", "gist", "gin", "spgist", "brin"],
         "oracle" | "dm" => vec!["NORMAL", "UNIQUE", "BITMAP", "FUNCTION-BASED NORMAL"],
         "sqlserver" => vec!["CLUSTERED", "NONCLUSTERED", "UNIQUE", "COLUMNSTORE"],
         "clickhouse" => vec!["minmax", "set", "bloom_filter", "ngrambf_v1", "tokenbf_v1"],
@@ -242,11 +270,26 @@ fn index_types_of(kind: ConnectionKind) -> Vec<&'static str> {
 /// 存储引擎清单（`features.engines`）：MySQL 系是服务端常量；ClickHouse 给
 /// 能直接落 SQL 的完整写法；其它方言没有这个概念，如实给空。
 fn engines_of(kind: ConnectionKind) -> Vec<&'static str> {
+    // Databend 只有一种存储引擎（FUSE，天然列存 + 对象存储），界面上的「存储引擎」
+    // 下拉实际用不到 —— 但清单不能空，否则守门单测变红。
+    if kind.key() == "databend" {
+        return vec!["FUSE"];
+    }
+    // RisingWave 没有存储引擎概念。
+    if kind.key() == "risingwave" {
+        return vec!["HUMAN_READABLE"];
+    }
     match kind.key() {
-        // OB 语法层接受 ENGINE=（解析后忽略）；StarRocks 与 Doris 同源
-        "mysql" | "mariadb" | "oceanbase" | "doris" | "starrocks" => vec![
+        // OB 语法层接受 ENGINE=（解析后忽略）；GreatSQL / GoldenDB 是 MySQL 协议族
+        //（计算节点对外就是 MySQL 语法），引擎清单照 MySQL 给。
+        "mysql" | "mariadb" | "greatsql" | "goldendb" | "oceanbase" => vec![
             "InnoDB", "MyISAM", "MEMORY", "CSV", "ARCHIVE", "BLACKHOLE", "MRG_MYISAM", "FEDERATED",
         ],
+        // Doris / StarRocks / SelectDB 只有 **OLAP** 一个引擎：给 InnoDB/MyISAM 那套是**假选项**
+        //（2026-11-17 真机实测：`ENGINE=InnoDB` ⇒ Doris `Unknown engine name: innodb`、
+        // StarRocks `Unknown engine name: InnoDB`，建表直接失败）。它们默认就是 OLAP，
+        // 这一项只为把「引擎」那行显示成可选而不是纯手输。
+        "doris" | "starrocks" | "selectdb" => vec!["OLAP"],
         // TiDB 只有一个真正生效的引擎（MyISAM/MEMORY 语法兼容但被静默忽略，
         // 给出去只会让用户选了个假选项）。
         "tidb" => vec!["TiDB"],
@@ -285,13 +328,13 @@ fn engines_of(kind: ConnectionKind) -> Vec<&'static str> {
 fn edit_capabilities(kind: &str) -> Value {
     // (ddlStyle, quoteStyle, 可改已有列, 列注释, 表选项, 自增, 索引重建)
     let (style, quote, modify, comment, table_options, auto_inc, rebuild) = match kind {
-        "mysql" | "mariadb" | "oceanbase" => ("mysql", "BACKTICK", true, true, true, true, true),
+        "mysql" | "mariadb" | "oceanbase" | "greatsql" | "goldendb" => ("mysql", "BACKTICK", true, true, true, true, true),
         // TiDB 语法层兼容 MySQL 的 ALTER 生成器（ddlStyle 沿用 mysql）；没有
         // `ALTER INDEX … REBUILD` 这类索引重建语法，如实 false。
         "tidb" => ("mysql", "BACKTICK", true, true, true, true, false),
         // StarRocks 与 Doris 同源：ALTER 生成器、字符集清单都照 Doris 走
-        "doris" | "starrocks" => ("doris", "BACKTICK", true, true, true, true, true),
-        "postgresql" | "kingbase" | "opengauss" => ("pg", "DOUBLE", true, true, false, false, true),
+        "doris" | "starrocks" | "selectdb" => ("doris", "BACKTICK", true, true, true, true, true),
+        "postgresql" | "kingbase" | "opengauss" | "highgo" | "vastbase" | "uxdb" | "gaussdb" => ("pg", "DOUBLE", true, true, false, false, true),
         // Oracle 12c+ 的标识列能查到（user_tab_identity_cols），自增如实给 true。
         // DM 单独拆出来给 false：达梦的标识列记在哪张系统视图上、没有实例可验证（见 dialect.rs 里
         // column_types 的 dm 分支注释）。原先跟着 Oracle 一起 true，结果界面上给了个**永远勾不上**的
@@ -324,13 +367,29 @@ fn edit_capabilities(kind: &str) -> Value {
         // 的保守档给（可建表，结构编辑等真机逐条验过再放开）。建表语法与 pg
         // 同族（标准 ANSI 列定义），ddlStyle 借 pg 的生成器。
         "duckdb" => ("pg", "DOUBLE", false, false, false, false, false),
+        // Databend（**实测**，见 _uitest/ddl-cap-probe2.py 与 _db2-databend-notnull.py）：
+        // `ALTER TABLE … MODIFY COLUMN c <type>` 改类型可用、`RENAME COLUMN a TO b` 可用、
+        // 加列/删列可用、列注释可用（两种写法都生效）。
+        // 但不能做的比能做的多，而且**失败也不报错**：Databend 的 ALTER 是异步任务，
+        // NOT NULL / DEFAULT / PRIMARY KEY / 自增 一律"提交成功、刷新后没变化"；
+        // VARCHAR 的长度被服务端归一成 16382（改长度看不出任何变化）。
+        // 所以可空/默认值/长度这三格锁死、生成器不发它们 —— 让用户改完看不到效果才是骗人。
+        "databend" => ("databend", "DOUBLE", true, true, false, false, false),
+        // RisingWave（**实测**）：`ALTER COLUMN c TYPE <type>`（**不能带长度**，`varchar(50)` 直接
+        // 语法错）、加列、删列可用；改名 / SET NOT NULL / SET DEFAULT / 加主键 / 自增
+        // 全是 `Feature is not yet implemented`；`comment on column` 能执行但 col_description
+        // 读回来是空 —— 注释如实 false，否则用户写了注释刷新就没了。
+        "risingwave" => ("risingwave", "DOUBLE", true, false, false, false, false),
         // 非关系型：界面按「不支持在线改结构」处理（没实测过就不声明 ——
         // 声明得比实现靠前，等于让用户去撞数据库的报错）
         _ => ("generic", "DOUBLE", false, false, false, false, false),
     };
     // (字符集清单, 字符集 → 排序规则映射)
     let (charsets, collations): (Vec<&str>, Value) = match kind {
-        "mysql" | "mariadb" | "doris" | "starrocks" => (
+        // GreatSQL 是 MySQL 8.0 的分支，字符集/排序规则集合与 MySQL 完全一致；
+        // GoldenDB 计算节点对外是 MySQL 协议（见 plugins/connection-types/goldendb.yaml），
+        // 同一份清单；SelectDB 与 Doris 同源。名单外的值下拉仍可手输。
+        "mysql" | "mariadb" | "greatsql" | "goldendb" | "doris" | "starrocks" | "selectdb" => (
             vec![
                 // 常用字符集（MySQL/MariaDB 的服务端标准集合在版本间很稳定）
                 "utf8mb4", "utf8mb3", "utf8", "latin1", "latin2", "latin5", "latin7", "gbk", "gb18030",
@@ -817,10 +876,16 @@ pub async fn tables(
     RawQuery(raw): RawQuery,
 ) -> XResult<Json<Value>> {
     let params = Params::parse(raw.as_deref());
-    let (_, dialect) = ctx_of(&state, &id).await?;
+    let (record, dialect) = ctx_of(&state, &id).await?;
     let database = params.get("database").unwrap_or_default();
-    let (_, schema_in_db) = split_db_schema(&database, &dialect);
-    let schema = params.get("schema").filter(|s| !s.is_empty()).or(schema_in_db);
+    // Oracle / DM（`db_is_schema`）树上的「库」就是模式，而且**可以不带点**（达梦 `database=DEMO`）。
+    // 只按 `split_db_schema` 拆会得到 None，接着掉进 JDBC 通用路径 —— 真机上达梦 DEMO 模式
+    // 列出来的是 SYS 的三张系统表（HISTOGRAMS_TABLE / ##PLAN_TABLE / ##HISTOGRAMS_TABLE），
+    // 建在 DEMO 里的 USERS 根本不见（用户看到的「表树是错乱的」就是这条）。
+    let schema = params
+        .get("schema")
+        .filter(|s| !s.is_empty())
+        .or_else(|| scope_schema_of(&database, &dialect, record.config.database.as_deref()));
 
     // catalog 层级（Doris）：树上「库」的名字是 `catalog.库`，对象查 <catalog>.information_schema，
     // 不需要也不能切会话 —— JDBC URL 表达不了 catalog，硬塞进 database 会把 URL 弄坏。
@@ -968,7 +1033,10 @@ pub async fn table_count(
     if names.is_empty() {
         names = params.all("tables[]");
     }
-    let (_, dialect) = ctx_of(&state, &id).await?;
+    let (record, dialect) = ctx_of(&state, &id).await?;
+    // Oracle / DM：`database` 就是模式（db_is_schema），COUNT 的表引用必须带模式前缀，
+    // 否则一律按登录用户的默认模式解析 —— 真机：达梦上整批 COUNT 全部失败，界面行数恒空。
+    let scope_schema = scope_schema_of(&database, &dialect, record.config.database.as_deref());
     let mut out = Map::new();
     // 去空 + 去重：同一张表只数一次（前端把同一张表重复带过来时不该数两遍）
     let mut queue: Vec<String> = Vec::new();
@@ -1002,7 +1070,7 @@ pub async fn table_count(
                 format!(
                     "select {} as tbl, count(*) as cnt from {}",
                     dialect.literal(name),
-                    dialect.quote(name)
+                    dialect.table_ref(scope_schema.as_deref(), name)
                 )
             })
             .collect::<Vec<_>>()
@@ -1012,7 +1080,7 @@ pub async fn table_count(
             // 批里任何一张表出错（权限 / 视图 / 表被删）都会拖垮整条语句：
             // 这一批退回到「逐表各发一条」的老路径，行为与改造前完全一致。
             for name in &chunk {
-                let sql = dialect.count_sql(name);
+                let sql = dialect.count_sql_in(scope_schema.as_deref(), name);
                 if let Ok(result) = run_sql_in_background(&state, &id, &database, sql, 1).await {
                     if let Some(count) = count_value_of(&result) {
                         out.insert(name.clone(), json!(count));
@@ -1085,6 +1153,13 @@ pub async fn stats(
         // 界面就看到「2 张表」被显示成 0（实测）
         out.insert(key.to_ascii_lowercase(), value);
     }
+    // 但对外的键名是**驼峰** `sizeText`：上一步折成小写后，`entry("sizeText")` 永远命中
+    // 不到 `sizetext`，于是同一个对象里同时出现 `sizetext: "10 MB"` 与 `sizeText: "—"`
+    // —— 前端读后者，库大小恒显示「—」（金仓真机实测，PG 一样中招）。
+    // 把规范键名搬回来，再补默认值。
+    if let Some(value) = out.remove("sizetext") {
+        out.insert("sizeText".to_string(), value);
+    }
     out.entry("tables".to_string()).or_insert(json!(0));
     out.entry("sizeText".to_string()).or_insert(json!("—"));
     Ok(Json(Value::Object(out)))
@@ -1100,11 +1175,12 @@ pub async fn columns(
         .get("table")
         .ok_or_else(|| XError::bad_request("缺少 table 参数"))?;
     let database = params.get("database").unwrap_or_default();
-    let (_, dialect) = ctx_of(&state, &id).await?;
+    let (record, dialect) = ctx_of(&state, &id).await?;
     // 「库.模式」里的**模式**那一层（PG / SQL Server / Kingbase 的树上会拼在库名后面）。
     // 不拆出来会怎样（用户反馈）：这些库取列走 JDBC `getColumns`，而它只认连接默认 schema
     // （PG=public、SQLServer=dbo）—— 别的 schema 下的表就"能列出表、字段却是空的"。
-    let (_, schema) = split_db_schema(&database, &dialect);
+    // Oracle / DM 还要认**裸模式名**（达梦 `database=DEMO`），见 scope_schema_of 的说明。
+    let schema = scope_schema_of(&database, &dialect, record.config.database.as_deref());
     // 外部 catalog（`catalog.库`，Doris 系）：scope::resolve 对它明确拒绝（JDBC 连接
     // 无法指定 catalog），而内核的列元数据（JDBC getColumns）也表达不了三段名 ——
     // 走 `desc \`c\`.\`d\`.\`t\``。高级搜索的条件列、表格列头都靠这个接口。
@@ -1131,13 +1207,26 @@ pub async fn columns(
             .collect();
         return Ok(Json(Value::Array(payload)));
     }
-    let target = crate::api::scope::resolve(&state, &id, &database).await?;
-    let engine = state.engine();
-    // 表名要进闭包（移动），而下面补类型时还要再用一次，所以先复制一份
-    let queried = table.clone();
-    let schema_for_call = schema.clone();
-    let mut columns =
-        blocking(move || engine.list_columns_fresh_in(&target, &queried, schema_for_call.as_deref())).await?;
+    // 金仓不走 JDBC `getColumns()`：V8R3 服务端**没有** `pg_catalog` 兼容层，而
+    // kingbase8 驱动（9.0.0 / 9.0.1 实测一致，驱动自报 V8R6）内部那条取列 SQL 引用了
+    // `pg_catalog.pg_namespace` ⇒ 每一次取列都 500「关系 PG_CATALOG.PG_namespace 不存在」，
+    // 表现就是「树上能列出表，点开表结构全红」。这里直接读系统目录，绕开驱动。
+    // 目录查询自己失败（表名/模式拼错返回 0 行）时返回 None，继续走下面的 JDBC 路径，
+    // 让上层报出真实错误，而不是把「没这一列」显示成空字段表。
+    let mut columns = match kingbase_columns(&state, &id, &database, &table, schema.as_deref()).await {
+        Some(columns) => columns,
+        None => {
+            let target = crate::api::scope::resolve(&state, &id, &database).await?;
+            let engine = state.engine();
+            // 表名要进闭包（移动），而下面补类型时还要再用一次，所以先复制一份
+            let queried = table.clone();
+            let schema_for_call = schema.clone();
+            blocking(move || {
+                engine.list_columns_fresh_in(&target, &queried, schema_for_call.as_deref())
+            })
+            .await?
+        }
+    };
     // 「补类型 / 注释 / 自增」这条也走「库.模式」：它的方言 SQL 用的是 `current_schema()` /
     // `::regclass` / `object_id()`（只看连接自己的 schema），所以 run_sql_in 会把 schema 交给
     // 代理"临时切过去再切回"（见 QueryRequest::schema 的说明）—— 这正是"指定 schema 时一次全对"的关键。
@@ -1173,6 +1262,111 @@ pub async fn columns(
         }
     }
     Ok(Json(payload))
+}
+
+/// 金仓（KingbaseES）的列清单：直接读 `sys_catalog`，不经 JDBC `getColumns()`。
+///
+/// 为什么必须绕开驱动：金仓 V8R3 服务端**没有** `pg_catalog` 兼容层，而 kingbase8 驱动
+/// （9.0.0 / 9.0.1 实测表现一致，驱动自报版本 V8R6）内部那条取列 SQL 硬编码了
+/// `pg_catalog.pg_namespace` ⇒ 每一次取列都 500「关系 PG_CATALOG.PG_namespace 不存在」。
+/// 症状是「树上能列出表，点开表结构全红」，而 `data` / `ddl` / `users` 都正常 —— 很容易
+/// 被误判成权限问题。这里直接查 `sys_class` / `sys_attribute` / `sys_attrdef` / `sys_constraint`。
+///
+/// 返回 `None` 的情形：不是金仓，或者目录查不到行（表名/模式不对）—— 交回调用方走原路径，
+/// 让上层报出真实错误，而不是把「没有这张表」显示成一张空字段表。
+pub(crate) async fn kingbase_columns(
+    state: &AppState,
+    id: &str,
+    database: &str,
+    table: &str,
+    schema: Option<&str>,
+) -> Option<Vec<ColumnDetail>> {
+    let (_, dialect) = ctx_of(state, id).await.ok()?;
+    if dialect.kind.key() != "kingbase" {
+        return None;
+    }
+    let table_lit = dialect.literal(table);
+    // 模式名比较必须**大小写不敏感**：金仓把未加引号的标识符折成大写，
+    // 而目录里存的是小写（`public`）；`current_schema()` 在金仓上回来的是 `PUBLIC`
+    // —— 精确比较会 0 行，然后退回 JDBC 又 500（真机踩出来的）。
+    let ns_oid = match schema.map(str::trim).filter(|name| !name.is_empty()) {
+        Some(schema) => format!(
+            "(select oid from pg_namespace where lower(nspname) = lower({}))",
+            dialect.literal(schema)
+        ),
+        // 不指定模式时**不能依赖 `current_schema()`**：金仓的 JDBC 会话上它可能回来 NULL
+        // （search_path 与 ksql 不一致），子查询随即 0 行 —— 于是又退回会 500 的驱动路径。
+        // 改成「按表名挑一个非系统模式的 oid」：表名在库里通常唯一，且与树上的用法一致。
+        None => format!(
+            "(select c2.relnamespace from pg_class c2 \
+              join pg_namespace n2 on n2.oid = c2.relnamespace \
+              where c2.relname = {table_lit} and c2.relkind in ('r','p','v') \
+                and lower(n2.nspname) not in ('sys_catalog','information_schema') \
+              order by lower(n2.nspname) limit 1)"
+        ),
+    };
+    // 写 PG 版语句再过一遍词法改名（`pg_class` → `sys_class` …）。
+    // `format_type` / `col_description` 金仓保留同名函数，改名表里刻意没有它们。
+    let sql = format!(
+        "select a.attname as name, \
+         format_type(a.atttypid, a.atttypmod) as type_text, \
+         case when a.attnotnull then 0 else 1 end as nullable, \
+         sys_get_expr(d.adbin, d.adrelid) as default_value, \
+         case when exists (select 1 from pg_constraint con \
+                            where con.conrelid = c.oid and con.contype = 'p' \
+                              and a.attnum = any(con.conkey)) then 1 else 0 end as is_pk \
+         from pg_class c \
+         join pg_attribute a on a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped \
+         left join pg_attrdef d on d.adrelid = c.oid and d.adnum = a.attnum \
+         where c.relname = {table_lit} and c.relnamespace = {ns_oid} \
+         order by a.attnum"
+    );
+    let sql = crate::api::dialect_ops::kb_catalog_sql(&sql);
+    let result = run_sql_in(state, id, database, sql, 1000).await.ok()?;
+    let rows = rows_of(&result);
+    if rows.is_empty() {
+        return None;
+    }
+    // 布尔位一律宽容解析：金仓回来的是 0/1，改名前的 PG 版本是 true/false
+    let flag = |row: &Map<String, Value>, key: &str| -> bool {
+        row.iter().any(|(k, v)| {
+            k.eq_ignore_ascii_case(key)
+                && match v {
+                    Value::Bool(b) => *b,
+                    Value::Number(n) => n.as_i64().unwrap_or(0) != 0,
+                    Value::String(s) => matches!(s.trim(), "1" | "t" | "T" | "true" | "TRUE"),
+                    _ => false,
+                }
+        })
+    };
+    let mut out = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let name = text_ci(row, "name");
+        if name.is_empty() {
+            continue;
+        }
+        let type_text = text_ci(row, "type_text");
+        let default_value = text_ci(row, "default_value");
+        out.push(ColumnDetail {
+            name,
+            type_name: if type_text.is_empty() { None } else { Some(type_text) },
+            nullable: flag(row, "nullable"),
+            primary_key: flag(row, "is_pk"),
+            // 默认值只在「确实有」时给：空串会让界面显示一个空的默认值输入框
+            default_value: if default_value.is_empty() {
+                None
+            } else {
+                Some(default_value)
+            },
+            // 自增交给 `enrich_column_types`（它的 is_identity / nextval 判定已在金仓上验过）
+            auto_increment: false,
+        });
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
 }
 
 /// 结果集的**列注释**（`列名(小写) → 注释`）：SQL 编辑器对单表查询在表头第二行显示
@@ -1256,7 +1450,9 @@ pub async fn table_comment_map(
     let dialect = Dialect::new(record.kind());
     // 库名可能带模式（`db.schema`）：方言的表选项 SQL 要的是**模式名**
     // （PG 是 `n.nspname`、SQL Server 是 schema），给整串只会查不到。
-    let (db_only, schema) = split_db_schema(database, &dialect);
+    // Oracle / DM 的裸模式名（达梦 `DEMO`）同样要当模式用，见 scope_schema_of。
+    let (db_only, _) = split_db_schema(database, &dialect);
+    let schema = scope_schema_of(database, &dialect, record.config.database.as_deref());
     let scope = schema.as_deref().unwrap_or(db_only.as_str());
     let Meta::Sql(sql) = dialect.table_options(scope) else {
         return out;
@@ -1400,13 +1596,10 @@ pub async fn search_objects(
     }
 
     let database = params.get("database").unwrap_or_default();
-    let (_, dialect) = ctx_of(&state, &id).await?;
-    let (db_only, mut schema) = split_db_schema(&database, &dialect);
+    let (record, dialect) = ctx_of(&state, &id).await?;
     // Oracle / DM 的「库」层就是模式：不把它当模式用，就会落到下面「枚举全部模式」的分支，
-    // 一次搜索 60 秒起（真机）而且结果跨模式。
-    if schema.is_none() && dialect.db_is_schema() && !db_only.trim().is_empty() {
-        schema = Some(db_only);
-    }
+    // 一次搜索 60 秒起（真机）而且结果跨模式。（裸模式名也算模式，见 scope_schema_of）
+    let schema = scope_schema_of(&database, &dialect, record.config.database.as_deref());
     let target = crate::api::scope::resolve(&state, &id, &database).await?;
 
     // 表/视图清单：schema 层级的类型**必须**与树用同一个来源（`dialect.tables_in_schema`）。

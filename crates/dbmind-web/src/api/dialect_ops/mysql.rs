@@ -348,6 +348,11 @@ impl DialectOps for DorisOps {
         reset_privileges: bool,
         attrs: &UserAttrs,
     ) -> Meta {
+        // StarRocks 没有 `mysql` 库：建/改/删用户与授权都无从生成（见 `users`），
+        // 如实 Absent ⇒ features.supportsUserManage=false，界面不摆「用户管理」入口。
+        if self.starrocks {
+            return Meta::Absent;
+        }
         mysql_user_action(
             self,
             MyFlavor::Doris,
@@ -365,22 +370,42 @@ impl DialectOps for DorisOps {
     }
 
     fn users(&self) -> Meta {
-        mysql_doris_users()
+        // StarRocks 没有 `mysql` 库 —— 读写 `mysql.user` 一律 `Unknown database 'mysql'`
+        //（真机实测：整条清单 500）。它的账号在 FE 里、只有 `SHOW USERS` 能看到，
+        // 而「编辑 / 授权 / 角色」整条链路都拿不到表结构支撑，所以这一族如实 Absent，
+        // 界面按「该类型不支持用户管理」显示，好过点一下就报错。
+        if self.starrocks {
+            Meta::Absent
+        } else {
+            mysql_doris_users()
+        }
     }
 
     fn user_info(&self, name: &str) -> Meta {
+        if self.starrocks {
+            return Meta::Absent;
+        }
         mysql_user_info(self, name)
     }
 
     fn user_grants(&self, user: &str, host: &str) -> Meta {
+        if self.starrocks {
+            return Meta::Absent;
+        }
         mysql_user_grants(self, user, host, false)
     }
 
     fn role_info(&self, name: &str) -> Meta {
+        if self.starrocks {
+            return Meta::Absent;
+        }
         mysql_doris_role_info(self, name)
     }
 
     fn role_inventory(&self) -> Meta {
+        if self.starrocks {
+            return Meta::Absent;
+        }
         Meta::Sql("show roles".to_string())
     }
 

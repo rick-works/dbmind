@@ -1255,13 +1255,21 @@ async fn source_table_rows(
             "select name as t, total_rows as n from system.tables where database = '{}'",
             quote(&database)
         ),
-        // Kingbase 与 PG 同构（系统目录一样），只是驱动不同
-        "postgresql" | "kingbase" | "opengauss" => format!(
-            "select c.relname as t, coalesce(c.reltuples, 0)::bigint as n from pg_class c \
-             join pg_namespace ns on ns.oid = c.relnamespace \
-             where ns.nspname = '{}' and c.relkind = 'r'",
-            quote(&schema)
-        ),
+        // openGauss 与 PG 的目录同名；金仓的系统目录是 sys_*（**没有** pg_catalog 兼容层），
+        // 同一条语句要过一遍改名，否则金仓整库同步拿不到行数估算（排序退化成清单原序）
+        "postgresql" | "kingbase" | "opengauss" => {
+            let sql = format!(
+                "select c.relname as t, coalesce(c.reltuples, 0)::bigint as n from pg_class c \
+                 join pg_namespace ns on ns.oid = c.relnamespace \
+                 where ns.nspname = '{}' and c.relkind = 'r'",
+                quote(&schema)
+            );
+            if kind.kind.key() == "kingbase" {
+                crate::api::dialect_ops::kb_catalog_sql(&sql)
+            } else {
+                sql
+            }
+        }
         // Oracle / DM：`num_rows` 是统计信息里的估算（可能为 NULL，按 0 处理）
         "oracle" | "dm" => {
             let owner = schema.to_uppercase();

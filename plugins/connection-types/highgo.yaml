@@ -26,7 +26,8 @@ jdbc:
 traits:
   singleDatabase: false
   schemaAware: true
-supportLevel: experimental
+# 2026-11-17 **同族实例**（PostgreSQL 16.15，HighGo 基于 PostgreSQL 内核）逐项验证：24 项只读 + 上述 7 项写库全通过。
+supportLevel: operate
 capabilities:
   queryExecution: true
   metadataBrowse: true

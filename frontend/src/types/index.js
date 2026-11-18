@@ -74,7 +74,11 @@ export const hasCatalogsOf = (code) => Boolean(byType(code).catalogs)
  *
  * 对没有「库」这一层的类型（Oracle / DM，见 hideDbLevelOf），库那一段就是连接里填的
  * 服务名（如 FREE），把它写进页签标题、路径、历史上纯属噪音：用户眼里的"库"其实是模式。
- * 所以这里只留模式：`FREE.SYS` → `SYS`；只有服务名没有模式（`FREE`）→ 空串。
+ * 所以这里只留模式：`FREE.SYS` → `SYS`。
+ *
+ * 没有点号的值**原样返回**：这类类型的库名可以留空（达梦的连接串就不写库名），
+ * 树上的模式节点于是直接带裸模式名（`DEMO`），它不是"服务名噪音"而是用户要看的那一层；
+ * 老实现一律返回空串，页签路径/表详情标题里就整段丢掉模式。
  *
  * 其余类型原样返回（MySQL 的库名本身可以带点，不能乱切）。
  */
@@ -82,7 +86,7 @@ export const dbDisplayOf = (code, db) => {
   const q = db == null ? '' : String(db)
   if (!q || !hideDbLevelOf(code)) return q
   const i = q.indexOf('.')
-  return i > 0 ? q.slice(i + 1) : ''
+  return i > 0 ? q.slice(i + 1) : q
 }
 
 export { DB_TYPES }

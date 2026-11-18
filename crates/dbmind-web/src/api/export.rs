@@ -170,6 +170,10 @@ impl Format {
 #[derive(Default, Clone)]
 pub struct ExportReq {
     pub database: String,
+    /// 模式名（PG / SQL Server 等 schema 层级）：**与 database 分开传**。
+    /// 老实现只认 `database` 里的「库.模式」拼串，请求体里明明带了 schema 却被丢弃，
+    /// 于是表名裸奔 —— openGauss 上导出直接 `relation "snapshot" does not exist`（巡检实测）。
+    pub schema: String,
     pub sql: String,
     pub table: String,
     pub format: Format,
@@ -194,6 +198,7 @@ impl ExportReq {
         let options = body.get("options").cloned().unwrap_or(Value::Null);
         Ok(Self {
             database: field_str(body, "database"),
+            schema: field_str(body, "schema"),
             sql: field_str(body, "sql"),
             table: field_str(body, "table"),
             format: Format::parse(&field_str(body, "format"))?,
@@ -701,7 +706,7 @@ pub(crate) fn binary_literal(data: &dbmind_core::BlobBytes, dialect: Dialect) ->
 
 /// 表名限定：schema 层级的类型（SQL Server / PostgreSQL）在树上把「库.模式」拼成一个字符串，
 /// 而模式这一层必须体现在表名里，否则 SQL Server 会按**登录名的默认模式**去找表。
-pub(crate) fn qualified(table: &str, database: &str, dialect: Dialect) -> String {
+pub(crate) fn qualified(table: &str, database: &str, schema: Option<&str>, dialect: Dialect) -> String {
     let table = table.trim();
     // 表名/模式名都来自目录元数据（树里的真实名字）→ quote_exact 逐字加引号，
     // 否则 Oracle 上带引号建的小写表会被折成大写（ORA-00942）。
@@ -709,10 +714,19 @@ pub(crate) fn qualified(table: &str, database: &str, dialect: Dialect) -> String
         return dialect.quote_exact(table);
     }
     if dialect.is_schema_aware() {
-        if let Some((_, schema)) = database.split_once('.') {
-            if !schema.is_empty() {
-                return dialect.quote_exact(&format!("{schema}.{table}"));
-            }
+        // 显式 `schema` 优先，其次才是 `database` 里的「库.模式」拼串：
+        // 两条路都得走 —— 老客户端只传 database（拼串），新请求分两个字段传。
+        let schema = schema
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                database
+                    .split_once('.')
+                    .map(|(_, s)| s.trim())
+                    .filter(|s| !s.is_empty())
+            });
+        if let Some(schema) = schema {
+            return dialect.quote_exact(&format!("{schema}.{table}"));
         }
     }
     dialect.quote_exact(table)
@@ -729,7 +743,7 @@ fn base_sql(req: &ExportReq, dialect: Dialect) -> XResult<String> {
     }
     Ok(format!(
         "select * from {}",
-        qualified(&req.table, &req.database, dialect)
+        qualified(&req.table, &req.database, Some(req.schema.as_str()), dialect)
     ))
 }
 
@@ -1611,7 +1625,7 @@ async fn export_dump(
                 writeln!(
                     out,
                     "drop table if exists {};",
-                    qualified(table, &req.database, dialect)
+                    qualified(table, &req.database, Some(req.schema.as_str()), dialect)
                 )
                 .map_err(io_error)?;
             }
@@ -1746,7 +1760,10 @@ async fn pump_rows<S>(
 where
     S: RowSink + ?Sized,
 {
-    let base = format!("select * from {}", qualified(table, &req.database, dialect));
+    let base = format!(
+        "select * from {}",
+        qualified(table, &req.database, Some(req.schema.as_str()), dialect)
+    );
     // 字段脱敏（导出出口）：整条链路只在这里改写值，库里的数据一个字节都不动
     let mut mask = ExportMask::prepare(state, id, req, table).await;
     let page_size = req.size.unwrap_or(PAGE_ROWS).max(1);

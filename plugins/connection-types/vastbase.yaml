@@ -26,7 +26,11 @@ jdbc:
 traits:
   singleDatabase: false
   schemaAware: true
-supportLevel: experimental
+# 2026-11-17 **真机验证**：实验室 Vastbase G100 2.2.15（容器 lab-vastbase:25432），
+# 连接/库表/列/索引/DDL/数据/SQL(建库建表增删改 ALTER)/导出/用户角色/监控全通；
+# 24 项巡检 21 通过，仅 3 项系统审计表 audit.vb_audit_log 失败（openGauss 同源行为，非缺陷）。
+# 另证实：pg_hba 用 sha256 时 PG JDBC 可直连（与 openGauss 的 sha256 不同，无需换驱动）。
+supportLevel: operate
 capabilities:
   queryExecution: true
   metadataBrowse: true

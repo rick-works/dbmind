@@ -147,7 +147,13 @@ pub async fn data(
         .and_then(|value| value.as_array().cloned())
         .unwrap_or_default();
 
-    let (_, dialect) = ctx_of(&state, &id).await?;
+    let (record, dialect) = ctx_of(&state, &id).await?;
+    // Oracle / DM 的「库」层装的其实就是**模式**（`db_is_schema`），而这两个方言没有
+    // 可切的会话模式 —— 表引用必须自己带模式前缀，否则按登录用户的默认模式解析。
+    // 真机：达梦 `database=DEMO` 时 `select * from "USERS"` 报「无效的表或视图名[USERS]」，
+    // 改成 `"DEMO"."USERS"` 立刻正常。其余方言这里恒为 `None`（由影子连接/use 决定目标库）。
+    let scope_schema = super::scope_schema_of(&database, &dialect, record.config.database.as_deref());
+    let table_ref = dialect.table_ref(scope_schema.as_deref(), &table);
     // 外部 catalog（catalog_level 方言，如 CH 的 unified catalog）：`database` 是
     // `catalog.db` 全限定名。JDBC 连接无法指定外部 catalog（切库那条路在 scope 里被
     // 明确拒绝），但 ClickHouse 支持**三段名** —— 不切库，直接在主连接上查全限定表。
@@ -163,7 +169,7 @@ pub async fn data(
             ),
             format!("{}.{}", dialect.quote(&database), dialect.quote(&table)),
         ],
-        None => vec![dialect.quote(&table)],
+        None => vec![table_ref.clone()],
     };
     // 所有筛选条件（关键字模糊 + 高级搜索）都汇到这里，统一用 AND 串起来；
     // 同一份 where 既给数据查询、也给总条数统计 —— 否则会出现"筛出 1 行、总数说 10000"。
@@ -256,8 +262,9 @@ pub async fn data(
                 &id,
                 &database,
                 // 表名同样来自树（目录元数据）→ 逐字加引号，
-                // 否则带引号建的小写表在 Oracle 上被折成大写、报 ORA-00942
-                build_paged(&dialect.quote_exact(&table)),
+                // 否则带引号建的小写表在 Oracle 上被折成大写、报 ORA-00942；
+                // Oracle / DM 还要带模式前缀（见上面 table_ref 的说明）
+                build_paged(&table_ref),
                 size as usize,
             )
             .await
@@ -289,7 +296,10 @@ pub async fn data(
             &state,
             &id,
             &database,
-            format!("{}{where_suffix}", dialect.count_sql(&table)),
+            format!(
+                "{}{where_suffix}",
+                dialect.count_sql_in(scope_schema.as_deref(), &table)
+            ),
             1,
         )
         .await
@@ -402,7 +412,7 @@ pub async fn data_save(
     if table.is_empty() {
         return Err(XError::bad_request("缺少 table"));
     }
-    let (_, dialect) = ctx_of(&state, &id).await?;
+    let (record, dialect) = ctx_of(&state, &id).await?;
     let pk_columns: Vec<String> = body
         .get("pkColumns")
         .and_then(Value::as_array)
@@ -439,16 +449,22 @@ pub async fn data_save(
         .unwrap_or_default()
         .to_string();
     let target = crate::api::scope::resolve(&state, &id, &database).await?;
+    // Oracle / DM 的模式（`db_is_schema`）：取列元数据与拼语句都要用它，先算一次。
+    let scope_schema = super::scope_schema_of(&database, &dialect, record.config.database.as_deref());
     // 列类型（小写列名 → 类型名）：Oracle / 达梦的日期列必须生成
     // `to_date(...)` / `to_timestamp(...)`，否则 `'2026-02-01T00:00'` 这种 ISO 串
     // 会被按**会话 NLS_DATE_FORMAT** 解析 ⇒ `ORA-01861: 文字与格式字符串不匹配`
     //（豫园 Oracle 11g 实测：在表格里改一行日期列就报这个）。
     // 取不到元数据就退回旧行为 —— 绝不因为「多知道一点」让保存失败。
+    // 注意要用**带模式**的取列：达梦/Oracle 的 `getColumns` 只认会话当前模式，
+    // 不带模式会拿到默认模式里同名表的列（或空），日期列就漏了 to_date 转换。
     let column_types: std::collections::HashMap<String, String> = {
         let engine = state.engine();
         let connection = target.clone();
         let name = table.clone();
-        match blocking(move || engine.list_columns_fresh(&connection, &name)).await {
+        let schema = scope_schema.clone();
+        match blocking(move || engine.list_columns_fresh_in(&connection, &name, schema.as_deref())).await
+        {
             Ok(columns) => columns
                 .into_iter()
                 .filter_map(|column| {
@@ -466,8 +482,9 @@ pub async fn data_save(
             .cloned()
             .unwrap_or_default()
     };
-    // 就地编辑的目标表来自树（目录元数据）→ 逐字加引号
-    let quoted = dialect.quote_exact(&table);
+    // 就地编辑的目标表来自树（目录元数据）→ 逐字加引号；Oracle / DM 还要带模式前缀
+    // （`db_is_schema`：不带前缀会落到登录用户的默认模式，UPDATE 0 行或报表不存在）
+    let quoted = dialect.table_ref(scope_schema.as_deref(), &table);
 
     let mut statements: Vec<String> = Vec::new();
 

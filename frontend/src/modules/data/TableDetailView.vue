@@ -261,16 +261,16 @@
                            这个类把单元格与控件自身的内边距都收窄，输入框能宽出一大截（列宽不变）。
                            也不再挂 title 提示（用户反馈：这两格的悬停提示多余）。 -->
                       <td class="c-center c-num">
-                        <el-input v-model="c.length" size="small" :disabled="lenDisabled(c)" />
+                        <el-input v-model="c.length" size="small" :disabled="lenDisabled(c)" :title="lenTitle(c)" />
                       </td>
                       <td class="c-center c-num">
-                        <el-input v-model="c.scale" size="small" :disabled="lenDisabled(c)" />
+                        <el-input v-model="c.scale" size="small" :disabled="lenDisabled(c)" :title="lenTitle(c)" />
                       </td>
                       <td class="c-center">
                         <!-- 是/否一律只用勾选框（勾=是、不勾=否），不再跟「是/否」文字 —— 全库统一（用户反馈）。
                              主键列必然非空：勾选框在这里禁用，而不是等数据库把 ALTER 拒掉。 -->
-                        <el-checkbox v-model="c.nullable" :disabled="inputDisabled(c) || !!c.primaryKey"
-                                     :title="c.primaryKey ? $t('tdet.pkNotNull') : ''" />
+                        <el-checkbox v-model="c.nullable" :disabled="inputDisabled(c) || !!c.primaryKey || nullLocked"
+                                     :title="c.primaryKey ? $t('tdet.pkNotNull') : (nullLocked ? $t('tdet.nullLocked') : '')" />
                       </td>
                       <td v-if="showPkCol" class="c-center">
                         <!-- 能改的给可点的勾选框，不能改的给禁用勾选框 —— 状态照样一眼看得出（原来用一个星标图标） -->
@@ -290,7 +290,7 @@
                       <td>
                         <!-- 始终渲染输入框，默认值为 NULL 时以占位提示；输入即覆盖（原实现只显示 NULL 标签，导致无法编辑） -->
                         <el-input v-model="c.defaultValue" size="small" :disabled="defaultDisabled(c)"
-                                  :title="defaultDisabled(c) && !inputDisabled(c) ? $t('tdet.dorisDefaultTip') : (c.defaultIsNull ? 'NULL' : '')"
+                                  :title="defaultDisabled(c) && !inputDisabled(c) ? (isRisingwave ? $t('tdet.defaultLocked') : $t('tdet.dorisDefaultTip')) : (c.defaultIsNull ? 'NULL' : '')"
                                   :placeholder="c.defaultIsNull ? 'NULL' : ''" @input="c.defaultIsNull = false" />
                       </td>
                       <td v-if="showAutoIncrement" class="c-center">
@@ -929,7 +929,35 @@ const canEditLoaded = computed(() =>
   // derby / db2 也在内：后端 edit_capabilities 已声明它们支持改列（见 meta.rs），
   // 名单里漏了的话，后端说"支持"而这里把整张字段表灰成只读 —— 两处口径不一致
   //（DB2 之前就是这样：supportsColumnModify=false + 落到 generic，整表只读）。
-  has('supportsColumnModify') && ['mysql', 'pg', 'oracle', 'mssql', 'clickhouse', 'doris', 'derby', 'db2'].includes(ddlStyle.value))
+  has('supportsColumnModify') && ['mysql', 'pg', 'oracle', 'mssql', 'clickhouse', 'doris', 'derby', 'db2', 'databend', 'risingwave'].includes(ddlStyle.value))
+const isDatabend = computed(() => ddlStyle.value === 'databend')
+const isRisingwave = computed(() => ddlStyle.value === 'risingwave')
+/**
+ * 「可空 / 默认值」锁死的方言（生成器同样不产出对应子句）。
+ *
+ * Databend **实测可改**：`MODIFY COLUMN c bigint NOT NULL DEFAULT 9` 之后 `desc`
+ * 立刻反映 `Null=NO / Default=9`（之前判成"异步不生效"是测法不对，用了 `ALTER COLUMN`）。
+ * RisingWave 则是真的 `Feature is not yet implemented: SET NOT NULL / SET DEFAULT`。
+ */
+const nullLocked = computed(() => isRisingwave.value)
+/**
+ * 长度/精度格锁死的**行**判定。
+ *
+ * - RisingWave：`varchar(50)` 是语法错（只认不带长度的 varchar）—— 全锁；
+ * - Databend：VARCHAR 长度被服务端归一（`desc` 恒报 16382，改了看不出变化），
+ *   但 **DECIMAL/NUMERIC 的精度真实生效**（10,2 → 12,3 实测落库），故只锁非精确数值类型。
+ */
+const lenLockedFor = (r) => isRisingwave.value
+const lenTitle = (r) => {
+  if (isRisingwave.value) return t('tdet.lenRisingwave')
+  if (isDatabend.value) {
+    const t2 = String(r.type || '').trim().toLowerCase()
+    // 长度格对 Databend 一律可编辑，但 VARCHAR 的长度服务端不保存 —— 悬停里说清楚，
+    // 免得用户改完刷新发现「没变化」又当成 bug。
+    if (!(t2.startsWith('decimal') || t2.startsWith('numeric'))) return t('tdet.lenDatabend')
+  }
+  return ''
+}
 // 新增行可内联主键的方言
 const canSetPkOnAdd = computed(() => ['mysql', 'oracle', 'mssql'].includes(ddlStyle.value))
 // 修改主键/自增权限（与旧实现保持一致）
@@ -988,7 +1016,7 @@ const autoTitle = (row) => {
 
 const inputDisabled = (r) => isLoadedRow(r) && !canEditLoaded.value
 const typeDisabled = (r) => inputDisabled(r)
-const lenDisabled = (r) => r.opaque || inputDisabled(r)
+const lenDisabled = (r) => r.opaque || inputDisabled(r) || lenLockedFor(r)
 /**
  * 「默认值」这一格是否锁死。
  *
@@ -997,7 +1025,7 @@ const lenDisabled = (r) => r.opaque || inputDisabled(r)
  *（不带引号的 `DEFAULT 3` 更是语法错）。锁住这一格比让用户点了保存再吃一句
  * 看不懂的服务端报错更诚实；新加的列仍然可以带默认值。
  */
-const defaultDisabled = (r) => inputDisabled(r) || (isLoadedRow(r) && ddlStyle.value === 'doris')
+const defaultDisabled = (r) => inputDisabled(r) || (isLoadedRow(r) && (ddlStyle.value === 'doris' || nullLocked.value))
 /**
  * 字段名能否编辑。
  *
@@ -1524,6 +1552,54 @@ const buildColumnSql = (f, isEdit) => {
   // `Can not change aggregation type`（实测：连只改注释也会撞上）。
   // 聚合类型与 key 标记来自 `DESC … ALL`（见 load() 里那一段）；拿不到时按 value 列处理，
   // 语句退化成不带聚合类型的样子（至少是原来那句，而不是乱加）。
+  // Databend（**实测**，_uitest/_db-databend-cap.py）：
+  //   · `MODIFY COLUMN c <type> [NULL|NOT NULL] [DEFAULT x] [COMMENT '..']` 全部生效；
+  //   · MODIFY 是**完整重定义** —— 不带 NOT NULL 会把原约束清成可空，所以哪怕只改注释
+  //     也把 NULL/NOT NULL/DEFAULT 一起写全；
+  //   · VARCHAR 的长度被服务端归一（desc 恒 16382），长度格只对 DECIMAL 放开；
+  //   · 主键不支持后加（`add primary key` 语法错），主键勾选框仍锁死。
+  if (ddlStyle.value === 'databend') {
+    const n = f.name.trim()
+    const typeT = buildType(f.type, typeParam(f))
+    const o = f._orig
+    const curCm = String(f.comment ?? '').trim()
+    const dvx = String(f.defaultValue ?? '').trim()
+    const fullDef = () => {
+      let def = `${qt(n)} ${typeT}`
+      def += f.nullable ? ' NULL' : ' NOT NULL'
+      if (dvx !== '') def += ` DEFAULT ${defaultLiteral(dvx)}`
+      if (curCm) def += ` COMMENT '${sq(curCm)}'`
+      return def
+    }
+    if (isEdit) {
+      const stmts = []
+      if (n !== String(f.oldName || '').trim()) {
+        stmts.push(`ALTER TABLE ${t} RENAME COLUMN ${qt(f.oldName)} TO ${qt(n)}`)
+      }
+      const typeChanged = !o || normType(typeT) !== normType(o.type)
+      const nullChanged = !o || !!f.nullable !== !!o.nullable
+      const dvChanged = !o || dvx !== String(o.defaultValue ?? '').trim()
+      const cmChanged = has('supportsComment') && curCm !== String((o && o.comment) || '').trim()
+      if (typeChanged || nullChanged || dvChanged || cmChanged) {
+        stmts.push(`ALTER TABLE ${t} MODIFY COLUMN ${fullDef()}`)
+      }
+      return stmts.length ? stmts.join(';\n') : null
+    }
+    return `ALTER TABLE ${t} ADD COLUMN ${fullDef()}`
+  }
+  // RisingWave（**实测**）：只有 `ALTER COLUMN c TYPE <type>`（**不能带长度**，`varchar(50)`
+  // 直接语法错）、加列、删列可用；改名 / SET NOT NULL / SET DEFAULT / 注释 / 主键
+  // 全部 `Feature is not yet implemented` —— 生成器只产出"改类型"这一条。
+  if (ddlStyle.value === 'risingwave') {
+    const n = f.name.trim()
+    const typeT = buildType(f.type, typeParam(f)).replace(/^((?:var)?char)\s*\([^)]*\)/i, '$1')
+    if (isEdit) {
+      const o = f._orig
+      if (o && normType(typeT) === normType(o.type)) return null
+      return `ALTER TABLE ${t} ALTER COLUMN ${qt(n)} TYPE ${typeT}`
+    }
+    return `ALTER TABLE ${t} ADD COLUMN ${qt(n)} ${typeT}`
+  }
   if (ddlStyle.value === 'doris') {
     const typeText = `${qt(f.name.trim())} ${buildType(f.type, typeParam(f))}`
     if (isEdit) {

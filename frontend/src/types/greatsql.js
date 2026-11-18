@@ -17,7 +17,7 @@ export default {
   schemaLevel: 'none',
   defaultSchema: '',
   quoteStyle: 'BACKTICK',
-  logo: '',
+  logo: 'greatsql.svg',
   fallbackLogo: 'greatsql',
   fileType: false,
   defaultPort: 3306,
