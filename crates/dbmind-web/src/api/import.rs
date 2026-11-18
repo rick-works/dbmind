@@ -445,21 +445,79 @@ struct Parsed {
     rows: Vec<Vec<Option<String>>>,
 }
 
-fn parse_file(filename: &str, bytes: &[u8]) -> XResult<Parsed> {
-    let lower = filename.to_ascii_lowercase();
-    if lower.ends_with(".xlsx") {
-        return parse_xlsx(bytes);
+impl std::fmt::Debug for Parsed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Parsed")
+            .field("columns", &self.columns)
+            .field("rows", &self.rows.len())
+            .finish()
     }
-    if lower.ends_with(".xls") {
+}
+
+/// 一种导入格式：怎么认出它、怎么解析。
+///
+/// 原先是一个 `if/else` 链（`.xlsx` → `.xls` 报错 → `.json` 或看起来像 JSON → CSV 兜底），
+/// 新增一种格式要往中间插一行，而且「按扩展名认」与「按内容猜」两件事混在条件里看不出来。
+/// 表里把它们拆成两个字段，顺序即优先级。
+struct FileParser {
+    /// 认领用的扩展名（小写、带点）。空串表示「兜底，谁都不要的给它」。
+    extensions: &'static [&'static str],
+    /// 扩展名不认识时按**内容**猜（只有 JSON 这么做：它自带 `{` / `[` 开头）。
+    sniff: fn(&[u8]) -> bool,
+    parse: fn(&[u8]) -> XResult<Parsed>,
+    /// 认出来了但暂时不支持时的说明（`None` = 直接解析）。
+    unsupported: Option<&'static str>,
+}
+
+/// 解析器优先级表：前面认领走的，后面不再看。
+const PARSERS: &[FileParser] = &[
+    FileParser {
+        extensions: &[".xlsx"],
+        sniff: |_| false,
+        parse: parse_xlsx,
+        unsupported: None,
+    },
+    FileParser {
+        extensions: &[".xls"],
+        sniff: |_| false,
+        parse: parse_csv,
         // `.xls` 是 2003 的二进制格式（BIFF），与 `.xlsx`（zip + XML）是两套完全不同的东西：
         // 解析它得另写一套记录级解析。如实说清，并给出可执行的替代做法。
-        return Err(XError::bad_request(
+        unsupported: Some(
             "`.xls`（Excel 2003 二进制格式）尚未支持：请在 Excel 里「另存为 .xlsx 或 CSV」再导入",
-        ));
+        ),
+    },
+    FileParser {
+        extensions: &[".json"],
+        sniff: looks_like_json,
+        parse: parse_json,
+        unsupported: None,
+    },
+    // CSV 是兜底：不认识的扩展名（`.txt`、无后缀、手工改过的名字）都按 CSV 试一次
+    FileParser {
+        extensions: &[".csv", ".txt", ""],
+        sniff: |_| false,
+        parse: parse_csv,
+        unsupported: None,
+    },
+];
+
+fn parse_file(filename: &str, bytes: &[u8]) -> XResult<Parsed> {
+    let lower = filename.to_ascii_lowercase();
+    for parser in PARSERS {
+        let by_extension = parser
+            .extensions
+            .iter()
+            .any(|ext| !ext.is_empty() && lower.ends_with(ext));
+        if !by_extension && !(parser.sniff)(bytes) {
+            continue;
+        }
+        if let Some(message) = parser.unsupported {
+            return Err(XError::bad_request(message));
+        }
+        return (parser.parse)(bytes);
     }
-    if lower.ends_with(".json") || looks_like_json(bytes) {
-        return parse_json(bytes);
-    }
+    // 表最后一行是兜底 CSV，正常走不到这里；真走到了也不能静默返回空
     parse_csv(bytes)
 }
 
@@ -637,5 +695,66 @@ fn json_cell(value: &Value) -> Option<String> {
         Value::Number(number) => Some(number.to_string()),
         Value::Bool(flag) => Some(flag.to_string()),
         other => Some(other.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod parser_table_tests {
+    use super::*;
+
+    fn columns_of(name: &str, bytes: &[u8]) -> Vec<String> {
+        parse_file(name, bytes)
+            .unwrap_or_else(|err| panic!("{name} 解析失败：{err:?}"))
+            .columns
+    }
+
+    /// 扩展名 → 解析器 的对应关系必须与搬进表之前一致。
+    ///
+    /// 认错的表现不是报错，而是「列名变成整行内容」或者「一行数据被当成表头」，
+    /// 用户要到字段映射那一步才发现。
+    #[test]
+    fn 扩展名对应解析器保持不变() {
+        let csv = b"id,name\n1,alice\n".as_slice();
+        assert_eq!(columns_of("a.csv", csv), vec!["id", "name"]);
+        assert_eq!(columns_of("A.CSV", csv), vec!["id", "name"]);
+        // .txt / 无后缀 都按 CSV 兜底
+        assert_eq!(columns_of("a.txt", csv), vec!["id", "name"]);
+        assert_eq!(columns_of("noext", csv), vec!["id", "name"]);
+
+        let json = br#"[{"id":1,"name":"alice"}]"#.as_slice();
+        assert_eq!(columns_of("a.json", json), vec!["id", "name"]);
+    }
+
+    /// `.xls` 必须给出「另存为 .xlsx」的可执行提示，而不是笼统的解析失败。
+    #[test]
+    fn xls_给出可执行提示() {
+        let err = parse_file("a.xls", b"whatever").unwrap_err();
+        let text = format!("{err:?}");
+        assert!(text.contains("xlsx") || text.contains("CSV"), "{text}");
+    }
+
+    /// 扩展名不认识时按内容嗅探 JSON（用户常把 JSON 存成 .txt）。
+    #[test]
+    fn 内容嗅探_json() {
+        let json = br#"  [{"id":1}]"#.as_slice();
+        assert_eq!(columns_of("data_export", json), vec!["id"]);
+    }
+
+    /// 每个解析器都得有扩展名或嗅探能力，否则它在表里是死行。
+    #[test]
+    fn 表里没有死行() {
+        for parser in PARSERS {
+            let has_ext = parser.extensions.iter().any(|ext| !ext.is_empty());
+            // 用函数指针比较判断 sniff 是不是「恒假」的那个
+            let has_sniff = (parser.sniff)(b"{}") || (parser.sniff)(b"[]");
+            assert!(
+                has_ext || has_sniff,
+                "有一条解析器既没有扩展名、也不会嗅探内容，永远不会被选中"
+            );
+            assert!(
+                parser.unsupported.is_none() || has_ext,
+                "「认出来但不支持」的条目必须靠扩展名认领"
+            );
+        }
     }
 }

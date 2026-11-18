@@ -98,70 +98,148 @@ impl Default for Format {
     }
 }
 
+/// 一种导出格式的全部**静态事实**：怎么解析、文件名后缀、MIME、展示名，
+/// 以及它对「主键 / 数据行 / 打包」的要求。
+///
+/// 这些原先散在 6 个平行 `match` 里（`ext` / `media` / `label` / `needs_pk` /
+/// `needs_rows` / `packed`）—— 加一种格式要同时改 6 处，而且**漏改不会编译报错**：
+/// 比如新格式的 MIME 会落进 `_ => text/plain`（浏览器直接当文本下载），
+/// `needs_pk` 漏了就是「导出 UPDATE 时才在运行时发现没主键」。
+struct FormatSpec {
+    format: Format,
+    /// 前端可能传来的名字（含历史别名），第一个是规范名。
+    aliases: &'static [&'static str],
+    ext: &'static str,
+    media: &'static str,
+    /// 名字给人看（报错文案里用）。
+    label: &'static str,
+    /// UPDATE / DELETE 靠主键定位行，没有主键列就没法生成 —— 要提前报错。
+    needs_pk: bool,
+    /// 是否要读数据行。DDL 只查元数据、天然没有「第几页」，同步导出对 page/size
+    /// 的硬要求得把它排除掉，否则「导出建表语句」会收到一句莫名其妙的
+    /// 「必须指定 page 与 size」。
+    needs_rows: bool,
+    /// 整库转储时是否打包（数据类格式，一个表一个文件）。
+    packed: bool,
+}
+
+/// 全部导出格式。**顺序即报错文案里的枚举顺序**，`parse` 也按这张表匹配。
+const FORMATS: &[FormatSpec] = &[
+    FormatSpec {
+        format: Format::Csv,
+        aliases: &["", "csv"],
+        ext: "csv",
+        media: "text/csv; charset=UTF-8",
+        label: "CSV",
+        needs_pk: false,
+        needs_rows: true,
+        packed: true,
+    },
+    FormatSpec {
+        format: Format::Json,
+        aliases: &["json"],
+        ext: "json",
+        media: "application/json; charset=UTF-8",
+        label: "JSON",
+        needs_pk: false,
+        needs_rows: true,
+        packed: true,
+    },
+    FormatSpec {
+        format: Format::Xlsx,
+        aliases: &["excel", "xlsx"],
+        ext: "xlsx",
+        media: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        label: "Excel",
+        needs_pk: false,
+        needs_rows: true,
+        packed: true,
+    },
+    // `sql` 就是 INSERT 语句，与 sql-insert 同义；整库转储时它表示「DDL + 数据」
+    FormatSpec {
+        format: Format::SqlInsert,
+        aliases: &["sql", "sql-insert"],
+        ext: "sql",
+        media: "text/plain; charset=UTF-8",
+        label: "SQL INSERT",
+        needs_pk: false,
+        needs_rows: true,
+        packed: false,
+    },
+    FormatSpec {
+        format: Format::SqlUpdate,
+        aliases: &["sql-update"],
+        ext: "sql",
+        media: "text/plain; charset=UTF-8",
+        label: "SQL UPDATE",
+        needs_pk: true,
+        needs_rows: true,
+        packed: false,
+    },
+    FormatSpec {
+        format: Format::SqlDelete,
+        aliases: &["sql-delete"],
+        ext: "sql",
+        media: "text/plain; charset=UTF-8",
+        label: "SQL DELETE",
+        needs_pk: true,
+        needs_rows: true,
+        packed: false,
+    },
+    FormatSpec {
+        format: Format::Ddl,
+        aliases: &["ddl", "sql-ddl"],
+        ext: "sql",
+        media: "text/plain; charset=UTF-8",
+        label: "DDL",
+        needs_pk: false,
+        needs_rows: false,
+        packed: false,
+    },
+];
+
 impl Format {
+    /// 自己的规格。`expect` 是安全的：每一种枚举值都在 `FORMATS` 里有一行
+    /// （`每种格式都有规格` 这条测试守着）。
+    fn spec(self) -> &'static FormatSpec {
+        FORMATS
+            .iter()
+            .find(|spec| spec.format == self)
+            .expect("每种导出格式都必须在 FORMATS 里声明")
+    }
+
     /// 前端可能传来的格式名（含历史别名）。
     pub fn parse(raw: &str) -> XResult<Self> {
-        Ok(match raw.trim().to_ascii_lowercase().as_str() {
-            "" | "csv" => Format::Csv,
-            "json" => Format::Json,
-            "excel" | "xlsx" => Format::Xlsx,
-            // `sql` 就是 INSERT 语句，与 sql-insert 同义；
-            // 整库转储时它表示「DDL + 数据」，见 `export_dump`
-            "sql" | "sql-insert" => Format::SqlInsert,
-            "sql-update" => Format::SqlUpdate,
-            "sql-delete" => Format::SqlDelete,
-            "ddl" | "sql-ddl" => Format::Ddl,
-            other => return Err(XError::bad_request(format!("不支持的导出格式：{other}"))),
-        })
+        let key = raw.trim().to_ascii_lowercase();
+        FORMATS
+            .iter()
+            .find(|spec| spec.aliases.contains(&key.as_str()))
+            .map(|spec| spec.format)
+            .ok_or_else(|| XError::bad_request(format!("不支持的导出格式：{}", raw.trim())))
     }
 
     pub fn ext(self) -> &'static str {
-        match self {
-            Format::Csv => "csv",
-            Format::Json => "json",
-            Format::Xlsx => "xlsx",
-            Format::SqlInsert | Format::SqlUpdate | Format::SqlDelete | Format::Ddl => "sql",
-        }
+        self.spec().ext
     }
 
     pub fn media(self) -> &'static str {
-        match self {
-            Format::Csv => "text/csv; charset=UTF-8",
-            Format::Json => "application/json; charset=UTF-8",
-            Format::Xlsx => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            _ => "text/plain; charset=UTF-8",
-        }
+        self.spec().media
     }
 
-    /// 名字给人看（报错文案里用）。
     pub fn label(self) -> &'static str {
-        match self {
-            Format::Csv => "CSV",
-            Format::Json => "JSON",
-            Format::Xlsx => "Excel",
-            Format::SqlInsert => "SQL INSERT",
-            Format::SqlUpdate => "SQL UPDATE",
-            Format::SqlDelete => "SQL DELETE",
-            Format::Ddl => "DDL",
-        }
+        self.spec().label
     }
 
-    /// UPDATE / DELETE 靠主键定位行，没有主键列就没法生成 —— 要提前报错。
     fn needs_pk(self) -> bool {
-        matches!(self, Format::SqlUpdate | Format::SqlDelete)
+        self.spec().needs_pk
     }
 
-    /// 这个格式是否要读数据行。
-    ///
-    /// DDL 只查元数据、天然没有「第几页」，所以同步导出对 page/size 的硬要求得把它排除掉 ——
-    /// 否则「导出建表语句」会收到一句「必须指定 page 与 size」，而用户根本无从理解。
     fn needs_rows(self) -> bool {
-        self != Format::Ddl
+        self.spec().needs_rows
     }
 
-    /// 整库转储时是否需要打包（数据类格式，一个表一个文件）。
     fn packed(self) -> bool {
-        matches!(self, Format::Csv | Format::Json | Format::Xlsx)
+        self.spec().packed
     }
 }
 
@@ -2345,5 +2423,84 @@ mod extract_from_tests {
             extract_countable_from("SELECT a FROM t WHERE b = 'group by x'").as_deref(),
             Some("t WHERE b = 'group by x'")
         );
+    }
+}
+
+#[cfg(test)]
+mod format_table_tests {
+    use super::*;
+
+    const ALL: &[Format] = &[
+        Format::Csv,
+        Format::Json,
+        Format::Xlsx,
+        Format::SqlInsert,
+        Format::SqlUpdate,
+        Format::SqlDelete,
+        Format::Ddl,
+    ];
+
+    /// 每个枚举值都必须在 `FORMATS` 里有一行 —— 漏了会在 `spec()` 里 panic，
+    /// 而不只是「某个字段拿默认值」。
+    #[test]
+    fn 每种格式都有规格() {
+        for format in ALL {
+            let spec = FORMATS.iter().find(|s| s.format == *format);
+            assert!(spec.is_some(), "{format:?} 没在 FORMATS 里声明");
+        }
+        assert_eq!(FORMATS.len(), ALL.len(), "FORMATS 里有重复行");
+    }
+
+    /// 所有历史别名都必须能解析回同一个格式（前端老版本与新版本并存）。
+    #[test]
+    fn 历史别名都能解析() {
+        for spec in FORMATS {
+            for alias in spec.aliases {
+                assert_eq!(
+                    Format::parse(alias).unwrap(),
+                    spec.format,
+                    "别名 {alias:?} 没解析成 {:?}",
+                    spec.format
+                );
+            }
+        }
+        // 大小写与首尾空白都要能吃
+        assert_eq!(Format::parse("  XLsx ").unwrap(), Format::Xlsx);
+        assert!(Format::parse("parquet").is_err());
+    }
+
+    /// 三个「行为标志」的取值与搬进表之前逐字一致 —— 它们分别决定
+    /// 「要不要预检主键」「要不要分页读数据」「整库转储要不要打包」。
+    #[test]
+    fn 行为标志保持不变() {
+        assert!(Format::SqlUpdate.needs_pk() && Format::SqlDelete.needs_pk());
+        for format in [Format::Csv, Format::Json, Format::Xlsx, Format::SqlInsert, Format::Ddl] {
+            assert!(!format.needs_pk(), "{format:?} 不该要求主键");
+        }
+
+        assert!(!Format::Ddl.needs_rows(), "DDL 不读数据行");
+        for format in ALL.iter().filter(|f| **f != Format::Ddl) {
+            assert!(format.needs_rows(), "{format:?} 应该读数据行");
+        }
+
+        for format in [Format::Csv, Format::Json, Format::Xlsx] {
+            assert!(format.packed(), "{format:?} 整库转储应该打包");
+        }
+        for format in [Format::SqlInsert, Format::SqlUpdate, Format::SqlDelete, Format::Ddl] {
+            assert!(!format.packed(), "{format:?} 不该打包");
+        }
+    }
+
+    /// MIME 不能落空：落空会让浏览器把文件当纯文本直接打开。
+    #[test]
+    fn 每种格式都有_mime_与后缀() {
+        for format in ALL {
+            assert!(!format.media().is_empty(), "{format:?} 缺 MIME");
+            assert!(!format.ext().is_empty(), "{format:?} 缺文件后缀");
+            assert!(!format.label().is_empty(), "{format:?} 缺展示名");
+        }
+        assert_eq!(Format::Xlsx.ext(), "xlsx");
+        assert!(Format::Xlsx.media().contains("spreadsheet"));
+        assert_eq!(Format::SqlInsert.ext(), "sql");
     }
 }
