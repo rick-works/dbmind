@@ -250,23 +250,16 @@
   .btn-ghost { border: 1px solid var(--border); color: var(--text); background: rgba(255,255,255,.03); }
   .btn-ghost:hover { border-color: var(--primary); }
 
-  /* ===== 数据源无限跑马灯 ===== */
+  /* ===== 数据源清单 =====
+     原来是单行无限跑马灯：二十多个数据源只看得见九个，两头还被渐隐裁成半个词。
+     改成与 .wrap 同宽的多行流式排布（容器里自然折成 2~3 行、整行居中）——
+     一屏看全，不用等它滚，芯片边线也和下面的卡片对齐。 */
   .sources { padding: 0 0 48px; text-align: center; }
   .sources-label { font-size: 13px; color: var(--dim); letter-spacing: 2px; margin-bottom: 14px; }
-  .marquee {
-    overflow: hidden;
-    /* 不再整屏出血：与 .wrap 同宽同缩进（padding 24 让芯片边线与其它内容边线对齐），两端渐隐保留 */
+  .sources-list {
+    display: flex; flex-wrap: wrap; justify-content: center; gap: 10px;
     width: 100%; max-width: var(--content); margin: 0 auto; padding: 0 24px;
-    /* 两端要「先全透明、再渐入」：单纯线性渐隐时，被边界裁掉一半的芯片仍看得见半个词
-       （表现就是 MySQL 变成 SQL）。这里前 5%（约 55px）完全透明、18%（约 200px）才完全不透明，
-       任何半个芯片都落在透明区里。 */
-    -webkit-mask-image: linear-gradient(90deg, transparent 0, transparent 5%, #000 18%, #000 82%, transparent 95%, transparent);
-    mask-image: linear-gradient(90deg, transparent 0, transparent 5%, #000 18%, #000 82%, transparent 95%, transparent);
   }
-  .marquee-track { display: flex; width: max-content; animation: marquee 38s linear infinite; }
-  .marquee:hover .marquee-track { animation-play-state: paused; }
-  @keyframes marquee { to { transform: translateX(-50%); } }
-  .m-group { display: flex; gap: 10px; padding-right: 10px; }
   .chip {
     border: 1px solid var(--border); border-radius: 999px;
     padding: 5px 14px; font-size: 13.5px; color: var(--dim);
@@ -1230,22 +1223,18 @@
 
 <div class="sources reveal">
   <div class="sources-label" data-i18n="sources.label">— 开箱即用的数据源 · 持续增加 —</div>
-  <div class="marquee">
-    <div class="marquee-track" id="marqueeTrack">
-      <div class="m-group">
-        <span class="chip">MySQL</span><span class="chip">MariaDB</span><span class="chip">GreatSQL</span>
-        <span class="chip">TiDB</span><span class="chip">OceanBase</span><span class="chip">PostgreSQL</span>
-        <span class="chip" data-i18n="chip.kingbase">人大金仓</span><span class="chip">openGauss</span>
-        <span class="chip">瀚高 HighGo</span><span class="chip">海量 Vastbase</span>
-        <span class="chip">Oracle</span><span class="chip">SQL Server</span><span class="chip">DB2</span>
-        <span class="chip" data-i18n="chip.dm">达梦 DM</span>
-        <span class="chip">ClickHouse</span><span class="chip">Apache Doris</span><span class="chip">StarRocks</span>
-        <span class="chip">Databend</span><span class="chip">RisingWave</span>
-        <span class="chip">SQLite</span><span class="chip">DuckDB</span><span class="chip">H2</span><span class="chip">Derby</span>
-        <span class="chip">Redis</span><span class="chip">MongoDB</span><span class="chip">Elasticsearch</span>
-        <span class="chip" data-i18n="chip.more">更多接入中…</span>
-      </div>
-    </div>
+  <div class="sources-list">
+    <span class="chip">MySQL</span><span class="chip">MariaDB</span><span class="chip">GreatSQL</span>
+    <span class="chip">TiDB</span><span class="chip">OceanBase</span><span class="chip">PostgreSQL</span>
+    <span class="chip" data-i18n="chip.kingbase">人大金仓</span><span class="chip">openGauss</span>
+    <span class="chip">瀚高 HighGo</span><span class="chip">海量 Vastbase</span>
+    <span class="chip">Oracle</span><span class="chip">SQL Server</span><span class="chip">DB2</span>
+    <span class="chip" data-i18n="chip.dm">达梦 DM</span>
+    <span class="chip">ClickHouse</span><span class="chip">Apache Doris</span><span class="chip">StarRocks</span>
+    <span class="chip">Databend</span><span class="chip">RisingWave</span>
+    <span class="chip">SQLite</span><span class="chip">DuckDB</span><span class="chip">H2</span><span class="chip">Derby</span>
+    <span class="chip">Redis</span><span class="chip">MongoDB</span><span class="chip">Elasticsearch</span>
+    <span class="chip" data-i18n="chip.more">更多接入中…</span>
   </div>
 </div>
 
@@ -4882,8 +4871,7 @@ WHERE dt = :dt AND org = :org;</code></pre>
   var root = document.documentElement;
   var btn = document.getElementById('langToggle');
   var note = document.getElementById('docsLangNote');
-  // 每次切换都重新查询：跑马灯那组 chips 是页面底部脚本克隆出来的，
-  // 缓存节点列表会让克隆副本停在切换前的语言。
+  // 每次切换都重新查询节点：缓存的节点列表在内容被脚本重建后会指向旧 DOM。
   function each (sel, fn) { [].forEach.call(document.querySelectorAll(sel), fn); }
 
   function apply (lang) {
@@ -4936,12 +4924,6 @@ WHERE dt = :dt AND org = :org;</code></pre>
   }, { threshold: .12 })
   document.querySelectorAll('.reveal').forEach(el => io.observe(el))
 
-  // 数据源跑马灯：克隆一份 chips 拼在后面，translateX(-50%) 无缝循环
-  ;(() => {
-    const track = document.getElementById('marqueeTrack')
-    if (!track) return
-    track.appendChild(track.firstElementChild.cloneNode(true))
-  })()
 
   // 数据卡数字滚动：进入视口后从 0 数到目标值（保留前后缀，如 <1s / 100万+ / 17+）
   ;(() => {
