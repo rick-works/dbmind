@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "id": "sql-explain",
+  "type": "skill",
+  "name": { "zh": "SQL 讲解", "en": "Explain SQL" },
+  "version": "1.0.0",
+  "author": "DBMind",
+  "homepage": "https://www.dbmind.top/#plugins",
+  "description": {
+    "zh": "把一条 SQL 讲清楚：整体意图、逐句子句、隐含假设与坑（NULL / 隐式转换 / 分页 / 时区），最后给可读性改写。",
+    "en": "Explain a query: intent, clause by clause, hidden assumptions and traps (NULLs, implicit casts, paging, time zones), plus a readability rewrite."
+  },
+  "minAppVersion": "2.0.28",
+  "needsContext": true,
+  "prompt": "prompt.md",
+  "chatPrompt": "chat.md",
+  "inputs": [
+    {
+      "key": "sql",
+      "type": "text",
+      "label": { "zh": "要讲解的 SQL", "en": "SQL to explain" },
+      "placeholder": { "zh": "粘贴一条查询或 DML", "en": "Paste a query or DML" },
+      "required": true,
+      "rows": 10
+    },
+    {
+      "key": "focus",
+      "type": "text",
+      "label": { "zh": "想重点讲什么（可选）", "en": "Focus (optional)" },
+      "placeholder": { "zh": "例如：只看 JOIN 逻辑 / 只看 NULL 语义", "en": "e.g. only the JOIN logic / only NULL semantics" },
+      "required": false,
+      "rows": 2
+    }
+  ]
+}

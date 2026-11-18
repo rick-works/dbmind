@@ -212,6 +212,9 @@ pub async fn chat(State(state): State<AppState>, Json(req): Json<AiRequest>) -> 
         .clone()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(default_system);
+    // 对话里选中的插件技能（设置 → 插件中心装的 skill）：提示词拼进 system，
+    // 之后每一轮都持续生效 —— 所以技能不是「点一次跑一次」，而是这段对话的人格
+    let base = crate::api::plugins::augment_system(base, &req.plugin_skills, req.lang.as_deref());
     // 会话记账：先落用户这一句（这样即使模型调用失败，用户问过什么也留得住）
     let thread = teammate::begin_turn(
         req.thread_id.as_deref(),
@@ -265,6 +268,9 @@ pub async fn chat_stream(State(state): State<AppState>, Json(req): Json<AiReques
         .clone()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(default_system);
+    // 同 chat：把选中的插件技能拼进 system（降级时也保留 —— 技能只有几 KB，
+    // 真正贵的是表结构上下文）
+    let base = crate::api::plugins::augment_system(base, &req.plugin_skills, req.lang.as_deref());
     // 预算闸门放在拼上下文之前：降级时那份上下文根本不需要生成（省一次元数据往返）
     let downgraded = gate_budget()?;
     let system = if downgraded {

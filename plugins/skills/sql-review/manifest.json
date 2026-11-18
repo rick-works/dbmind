@@ -3,7 +3,7 @@
   "id": "sql-review",
   "type": "skill",
   "name": { "zh": "SQL 审查", "en": "SQL Review" },
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "DBMind",
   "homepage": "https://www.dbmind.top/#plugins",
   "description": {
@@ -13,6 +13,7 @@
   "minAppVersion": "2.0.28",
   "needsContext": true,
   "prompt": "prompt.md",
+  "chatPrompt": "chat.md",
   "inputs": [
     {
       "key": "sql",

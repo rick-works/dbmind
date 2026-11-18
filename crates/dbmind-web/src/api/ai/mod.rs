@@ -109,6 +109,12 @@ pub struct AiRequest {
     /// 知识库范围：null = 全部、[] = 本次不注入、[...] = 指定库
     #[serde(default)]
     pub kb_ids: Option<Value>,
+    /// 对话里**选中**的插件技能 id（插件中心装的 skill）。
+    ///
+    /// 与 `/api/plugins/{id}/run`（填表单、一次生成）不同：这里的提示词会拼进 system
+    /// 并持续生效，之后每一轮提问都带着它，直到用户把技能从输入框上摘掉。
+    #[serde(default)]
+    pub plugin_skills: Vec<String>,
     /// 目标方言（跨方言翻译用）
     #[serde(default)]
     pub target_dialect: Option<String>,

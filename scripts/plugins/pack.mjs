@@ -125,6 +125,11 @@ for (const id of fs.readdirSync(SRC).sort()) {
     console.error(`✗ ${id}: 缺少提示词文件 ${manifest.prompt}`)
     process.exit(1)
   }
+  // 对话形态的提示词（可选）：后端会优先用它，缺文件会让安装直接被拒
+  if (manifest.chatPrompt && !fs.existsSync(path.join(dir, manifest.chatPrompt))) {
+    console.error(`✗ ${id}: 缺少对话提示词文件 ${manifest.chatPrompt}`)
+    process.exit(1)
+  }
   const buf = zip(walk(dir))
   const file = `${id}-${manifest.version}.zip`
   const target = path.join(OUT, file)
@@ -136,6 +141,15 @@ for (const id of fs.readdirSync(SRC).sort()) {
   if (checkOnly && changed) {
     console.error(`✗ ${file} 与源码不一致（忘了跑 node scripts/plugins/pack.mjs）`)
     process.exit(1)
+  }
+  // 版本升级后旧包不再被索引引用：留在官网只会让用户从缓存里装回旧版
+  if (!checkOnly && fs.existsSync(OUT)) {
+    for (const old of fs.readdirSync(OUT)) {
+      if (old.startsWith(`${id}-`) && old.endsWith('.zip') && old !== file) {
+        fs.unlinkSync(path.join(OUT, old))
+        console.log(`  − 删除旧包 ${old}`)
+      }
+    }
   }
   console.log(`${changed ? '✎' : '='} ${file}  ${(buf.length / 1024).toFixed(1)} KB`)
   packages.push({ file, removed: false })

@@ -882,8 +882,15 @@ export default {
   'ai.tabInsightDesc': '统计画像 + 业务结论，可导出报告',
   'ai.tabKbIngest': '知识入库',
   'ai.tabKbIngestDesc': '上传文件自动识别结构，并起名建库',
-  // 插件技能（设置 → 插件中心安装的声明式技能包，运行窗与插件中心共用）
+  // 插件技能（设置 → 插件中心安装的声明式技能包）：选中后在对话里持续生效
+  'ai.skills': 'Skills',
+  'ai.builtinSkills': '内置能力',
   'ai.pluginSkills': '插件技能',
+  'ai.pluginSkillsEmpty': '还没有装插件技能 · 设置 → 插件中心',
+  'ai.skillPicked': '已启用技能「{name}」',
+  'ai.skillPickedChat': '已启用技能「{name}」，已切回自由对话',
+  'ai.skillUnpicked': '已取消技能「{name}」',
+  'ai.skillRemove': '移除技能',
   'api.requestFailed': '请求失败（{status}）',
   'api.networkFailed': '网络请求失败，请检查网络连接',
   'api.unsupportedType': '暂不支持该数据库类型的操作：{type}',

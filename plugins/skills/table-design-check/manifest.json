@@ -3,7 +3,7 @@
   "id": "table-design-check",
   "type": "skill",
   "name": { "zh": "表设计体检", "en": "Table Design Check" },
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "DBMind",
   "homepage": "https://www.dbmind.top/#plugins",
   "description": {
@@ -13,6 +13,7 @@
   "minAppVersion": "2.0.28",
   "needsContext": true,
   "prompt": "prompt.md",
+  "chatPrompt": "chat.md",
   "inputs": [
     {
       "key": "table",

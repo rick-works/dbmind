@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "id": "err-diagnose",
+  "type": "skill",
+  "name": { "zh": "报错诊断", "en": "Error Diagnosis" },
+  "version": "1.0.0",
+  "author": "DBMind",
+  "homepage": "https://www.dbmind.top/#plugins",
+  "description": {
+    "zh": "贴上报错与 SQL，判断是语法、权限、连接、类型还是超时；给出按概率排序的排查步骤与改法。",
+    "en": "Paste the error and the SQL: tell syntax from permissions, connectivity, types or timeouts, with ranked checks and a fix."
+  },
+  "minAppVersion": "2.0.28",
+  "needsContext": true,
+  "prompt": "prompt.md",
+  "chatPrompt": "chat.md",
+  "inputs": [
+    {
+      "key": "error",
+      "type": "text",
+      "label": { "zh": "报错原文", "en": "Raw error" },
+      "placeholder": { "zh": "完整错误信息（含错误码 / SQLSTATE）", "en": "Full error text, including code / SQLSTATE" },
+      "required": true,
+      "rows": 4
+    },
+    {
+      "key": "sql",
+      "type": "text",
+      "label": { "zh": "相关 SQL（可选）", "en": "Related SQL (optional)" },
+      "placeholder": { "zh": "触发报错的那条语句", "en": "The statement that failed" },
+      "required": false,
+      "rows": 8
+    }
+  ]
+}

@@ -142,6 +142,13 @@ pub struct Manifest {
     pub needs_context: bool,
     #[serde(default)]
     pub prompt: Option<String>,
+    /// 对话形态用的提示词（相对路径，可选）。
+    ///
+    /// `prompt` 是「表单 → 一次生成」的任务模板（带 `{{sql}}` 这类变量）；对话形态下没有表单，
+    /// 变量由用户消息给出，所以作者可以另写一份「人格与方法」放进这个文件。
+    /// 没给就退回 `prompt` 并清洗掉变量占位符（见 [`strip_placeholders`]）。
+    #[serde(default)]
+    pub chat_prompt: Option<String>,
     #[serde(default)]
     pub inputs: Vec<SkillInput>,
 }
@@ -222,6 +229,11 @@ fn validate(manifest: &Manifest, dir: &Path) -> XResult<()> {
     }
     if !dir.join(prompt).is_file() {
         return Err(XError::bad_request(format!("插件包里缺少提示词文件 {prompt}")));
+    }
+    if let Some(chat) = manifest.chat_prompt.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        if !dir.join(chat).is_file() {
+            return Err(XError::bad_request(format!("插件包里缺少对话提示词文件 {chat}")));
+        }
     }
     if manifest.inputs.iter().any(|i| i.key.trim().is_empty()) {
         return Err(XError::bad_request("inputs 里有空 key"));
@@ -751,6 +763,108 @@ async fn ai_chat_once(
     crate::api::ai::chat::ask_inline_with_usage(state, req, system, user, with_context).await
 }
 
+// ------------------------------------------------------------------ 对话形态：技能拼进 system
+
+/// 单个技能最多贡献多少字符：提示词是插件作者写的，不能让它把上下文预算吃光。
+const MAX_SKILL_PROMPT_CHARS: usize = 8000;
+/// 一条对话最多叠加几个技能（前端也限，这里兜底）。
+const MAX_SKILLS_PER_TURN: usize = 8;
+
+/// 清掉 `{{变量}}` 占位符。
+///
+/// 对话形态没有表单，变量由用户消息给出。留着占位符，模型会对着 `{{sql}}` 反问
+/// 「请提供 SQL」—— 等于把用户又踢回一次表单。
+pub(crate) fn strip_placeholders(text: &str) -> String {
+    let mut out = text.to_string();
+    while let Some(start) = out.find("{{") {
+        let rest = &out[start..];
+        let Some(end) = rest.find("}}") else { break };
+        out.replace_range(start..start + end + 2, "");
+    }
+    out.trim().to_string()
+}
+
+/// 插件名按界面语言挑一个（没起名就用 id）
+fn display_name(manifest: &Manifest, lang: Option<&str>) -> String {
+    manifest
+        .name
+        .as_ref()
+        .map(|n| n.pick(lang.unwrap_or("zh")))
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| manifest.id.clone())
+}
+
+/// 把一个已装技能读成一段 system 文本：优先 `chatPrompt`，否则退回 `prompt` 并清洗占位符。
+fn skill_prompt_text(dir: &Path, manifest: &Manifest) -> Option<String> {
+    let chat_file = manifest
+        .chat_prompt
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let file = chat_file.clone().or_else(|| manifest.prompt.clone())?;
+    let text = std::fs::read_to_string(dir.join(&file)).ok()?;
+    let text = if chat_file.is_some() {
+        // 作者专门写的对话提示词：原样使用（里面不该再有表单变量）
+        text.trim().to_string()
+    } else {
+        // 复用任务模板：中间的 {{sql}} 之类换成一句说明，首尾空行压掉
+        strip_placeholders(&text)
+            .split('\n')
+            .map(|line| line.trim_end().to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    if text.is_empty() {
+        return None;
+    }
+    Some(text.chars().take(MAX_SKILL_PROMPT_CHARS).collect())
+}
+
+/// 把对话里选中的插件技能拼进 system。
+///
+/// 与 `/api/plugins/{id}/run`（一次表单、一次生成）不同：这里的提示词是**持续生效**的
+/// 人格与方法，之后每一轮提问都带着它，直到用户把技能从输入框上摘掉。
+///
+/// 找不到 / 已停用 / 不是 skill 的 id 一律静默跳过 —— 插件被卸载了不该把整条对话打成 500。
+pub fn augment_system(base: String, ids: &[String], lang: Option<&str>) -> String {
+    if ids.is_empty() {
+        return base;
+    }
+    let disabled = disabled_ids();
+    let mut parts: Vec<String> = Vec::new();
+    let mut budget = MAX_SKILL_PROMPT_CHARS * MAX_SKILLS_PER_TURN / 2;
+    for id in ids.iter().take(MAX_SKILLS_PER_TURN) {
+        if !id_ok(id) || disabled.contains(id) {
+            continue;
+        }
+        let dir = root().join(id);
+        if !dir.is_dir() {
+            continue;
+        }
+        let Ok(manifest) = read_manifest(&dir) else { continue };
+        if manifest.kind != "skill" {
+            continue;
+        }
+        let Some(text) = skill_prompt_text(&dir, &manifest) else { continue };
+        if text.len() > budget {
+            tracing::warn!(id, len = text.len(), "技能提示词超预算，本次跳过");
+            break;
+        }
+        budget -= text.len();
+        parts.push(format!("### 技能：{}\n{}", display_name(&manifest, lang), text));
+    }
+    if parts.is_empty() {
+        return base;
+    }
+    format!(
+        "{base}\n\n用户已启用以下技能，请按它的要求处理用户消息；\
+变量类输入（如「待审查的 SQL」）由用户消息给出，不要反问占位符。\n\n{}",
+        parts.join("\n\n")
+    )
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -763,6 +877,15 @@ mod tests {
         assert!(!id_ok("../escape"));
         assert!(!id_ok(".hidden"));
         assert!(!id_ok(""));
+    }
+
+    #[test]
+    fn chat_mode_strips_form_placeholders() {
+        // 对话形态没有表单：{{sql}} 留着会被模型当成「让用户填」的占位符反问回去
+        let text = "审查下面这条：\n```sql\n{{sql}}\n```\n关注点：{{focus}}";
+        let out = strip_placeholders(text);
+        assert!(!out.contains("{{"), "{out}");
+        assert!(out.contains("审查下面这条"), "{out}");
     }
 
     #[test]

@@ -123,17 +123,19 @@
                 </div>
               </div>
 
-              <!-- 插件技能（设置 → 插件中心装好的）：与内置技能同一种卡片，点了弹运行窗 -->
+              <!-- 插件技能（设置 → 插件中心装好的）：点一下勾上，之后提问就按它的要求作答 -->
               <div v-if="pluginSkills.length" class="welcome-block">
                 <div class="welcome-section-title"><el-icon><MagicStick /></el-icon>{{ $t('ai.pluginSkills') }}</div>
                 <div class="welcome-grid">
                   <button v-for="p in pluginSkills" :key="p.id" class="welcome-card" type="button"
-                          :title="p.description" @click="openPluginSkill(p)">
+                          :class="{ 'is-on': isPicked(p.id) }" :title="p.description"
+                          @click="togglePickedSkill(p.id)">
                     <el-icon class="welcome-card-ic"><MagicStick /></el-icon>
                     <span class="welcome-card-tx">
                       <span class="welcome-card-name">{{ p.name }}</span>
                       <span class="welcome-card-desc">{{ p.description }}</span>
                     </span>
+                    <el-icon v-if="isPicked(p.id)" class="welcome-card-check"><Select /></el-icon>
                   </button>
                 </div>
               </div>
@@ -320,6 +322,17 @@
 
           <!-- 输入域 + 工具条同属一个「框」，工具条贴在框内底部 -->
           <div class="composer-box">
+            <!-- 已选插件技能：摆在输入框正上方 —— 「选了哪个技能」要一眼看见，
+                 点 × 取消（技能在这段对话里持续生效，所以必须随手可摘） -->
+            <div v-if="pickedSkills.length" class="picked-skills">
+              <span v-for="s in pickedSkills" :key="s.id" class="picked-skill" :title="s.description">
+                <el-icon :size="11"><MagicStick /></el-icon>
+                <span class="picked-skill-tx">{{ s.name }}</span>
+                <button class="picked-skill-x" type="button" :title="$t('ai.skillRemove')" @click="unpickSkill(s.id)">
+                  <el-icon :size="10"><Close /></el-icon>
+                </button>
+              </span>
+            </div>
             <el-input ref="inputRef" v-model="aiInput" type="textarea" :rows="3" resize="none" class="composer-textarea"
                       :placeholder="composePlaceholder"
                       @keydown="onComposeKeydown" @input="onComposeInput" />
@@ -340,17 +353,22 @@
                 <span class="composer-ctx-tx">{{ $t('ai.mate') }}</span>
                 <span v-if="alertCount" class="mate-badge">{{ alertCount }}</span>
               </button>
-              <!-- Skills：完全复用「模型」下拉的 el-dropdown，样式天然一致 -->
+              <!-- Skills：完全复用「模型」下拉的 el-dropdown，样式天然一致。
+                   插件技能在这里是**勾选式多选**（hide-on-click=false），选中后在对话里持续生效 -->
               <el-dropdown ref="skillDropRef" data-g="5" trigger="click" placement="top-start" popper-class="ai-model-dropdown"
-                           @command="pickSkill" @visible-change="onSkillVisible">
-                <button class="skill-btn" :class="{ open: skillsOpen }" type="button">
-                  <el-icon class="skill-btn-ic"><component :is="currentSkill.icon" /></el-icon>
-                  <span class="skill-btn-tx">{{ currentSkill.label }}</span>
+                           :hide-on-click="false" @command="pickSkill" @visible-change="onSkillVisible">
+                <button class="skill-btn" :class="{ open: skillsOpen, 'has-pick': pickedSkills.length }" type="button"
+                        :title="skillBtnLabel">
+                  <el-icon class="skill-btn-ic"><MagicStick /></el-icon>
+                  <span class="skill-btn-tx">{{ skillBtnLabel }}</span>
+                  <span v-if="pickedSkills.length" class="skill-btn-badge">{{ pickedSkills.length }}</span>
                   <el-icon class="skill-btn-caret"><ArrowDown /></el-icon>
                 </button>
                 <template #dropdown>
                   <div class="ai-dd-head">{{ $t('ai.pickSkill') }}</div>
                   <el-dropdown-menu class="ai-model-menu">
+                    <!-- 自由对话是默认态，不在列表里（见 tabs 上的注释） -->
+                    <el-dropdown-item disabled class="ai-dd-group">{{ $t('ai.builtinSkills') }}</el-dropdown-item>
                     <el-dropdown-item
                       v-for="t in tabs"
                       :key="t.key"
@@ -362,15 +380,20 @@
                       <span class="skills-name">{{ t.label }}</span>
                       <el-icon v-if="tab === t.key" class="skills-check"><Select /></el-icon>
                     </el-dropdown-item>
-                    <!-- 插件技能：装了几个就列几个，点了直接开运行窗（不占 tab） -->
+                    <!-- 插件技能：装了几个就列几个；点一下勾上（再点取消），不切页、不弹窗 -->
                     <template v-if="pluginSkills.length">
                       <el-dropdown-item disabled class="ai-dd-group">{{ $t('ai.pluginSkills') }}</el-dropdown-item>
                       <el-dropdown-item v-for="p in pluginSkills" :key="'plugin:' + p.id"
-                                        :command="'plugin:' + p.id" :title="p.description">
+                                        :command="'plugin:' + p.id" :class="{ active: isPicked(p.id) }"
+                                        :title="p.description">
                         <el-icon class="skills-ic"><MagicStick /></el-icon>
                         <span class="skills-name">{{ p.name }}</span>
+                        <el-icon v-if="isPicked(p.id)" class="skills-check"><Select /></el-icon>
                       </el-dropdown-item>
                     </template>
+                    <el-dropdown-item v-if="!pluginSkills.length" disabled class="ai-dd-group">
+                      {{ $t('ai.pluginSkillsEmpty') }}
+                    </el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>
@@ -619,10 +642,6 @@
     <!-- SQL 快捷验证：AI 给的 SQL 先看执行计划 / 试跑一次（不消耗 AI 调用） -->
     <SqlProbeDialog v-model="probeVisible" :sql="probeSql" :conn-id="ctxConnId"
                     :database="ctxEffectiveDatabase" :mode="probeMode" @insert="onProbeInsert" />
-
-    <!-- 插件技能运行窗：连接/库默认继承面板当前上下文（用户不用再选一遍） -->
-    <PluginSkillRun v-model="pluginRunOpen" :item="pluginRunItem"
-                    :conn-id="ctxConnId || ''" :database="ctxEffectiveDatabase" />
   </div>
 </template>
 
@@ -637,8 +656,6 @@ import { aiChat, aiChatStream, aiDataDict, aiInsight, aiAskStream, aiWarmup, aiE
   aiChangeApprove, aiChangeConfirm, aiChangeApply, aiChangeUndo, aiChangeReject,
   aiJobList, aiJobDismiss, aiJobResume, listPlugins } from '../../api'
 import KbIngestPanel from './KbIngestPanel.vue'
-// 插件技能运行窗：与「设置 → 插件中心」共用同一个组件，表单/调用逻辑只有一份
-import PluginSkillRun from './PluginSkillRun.vue'
 import { renderMarkdown, extractCodeBlocks } from '../../utils/markdown'
 import { t, te, locale } from '../../utils/i18n'
 import { schemaLevelOf, hideDbLevelOf } from '../../types'
@@ -697,15 +714,18 @@ const _ps = panelState[props.mode === 'studio' ? 'studio' : 'panel']
 const tab = toRef(_ps, 'tab')
 
 /**
- * Skills：把「能力」作为可切换的技能，由用户自己选择。
- * 定位：**只放对话替代不了的能力**。写 SQL、优化、诊断、改方言这类需求，
- * 直接对话就能做，因此不再单列；这里保留的是「要读真实表结构 / 要产出交付物」的技能：
- * 数据字典、表健康巡检（纯规则扫描、零 AI 消耗）、表数据洞察，
- * 三者的结果都能导出 Markdown / Word / Excel / PDF。
+ * Skills 列表里的「内置能力」。
+ *
+ * <p>**自由对话不在列表里**：它就是默认态（不选任何技能时的那段对话），
+ * 列进去等于让用户在「技能」里挑一个「不用技能」——零信息量的一个选项。
+ *
+ * <p>这里留下的只有**对话替代不了**的四个工作台：要读真实表结构并产出可导出报告的
+ * 数据字典 / 数据洞察、要画图与明细的智能问数、要上传解析文件的的知识入库。
+ * 纯提示词就能做的能力（SQL 审查、优化、诊断、建表规范……）一律做成插件，
+ * 按「插件技能」分组列在同一下拉里。
  */
 // ⚠️ 必须是 computed：写死成普通数组只会在模块加载时求值一次，之后切语言不会跟着变
 const tabs = computed(() => [
-  { key: 'chat', label: t('ai.tabChat'), icon: ChatDotRound, desc: t('ai.tabChatDesc') },
   // 智能问数：就是本面板里的一个技能页（模板里 v-if="isAsk" 渲染 ChatBiView）。
   // 刻意**不**单开页签、也不上顶栏菜单 —— 入口只有这里一处。
   { key: 'ask', label: t('ai.tabAsk'), icon: DataAnalysis, desc: t('ai.tabAskDesc') },
@@ -714,16 +734,17 @@ const tabs = computed(() => [
   { key: 'kbIngest', label: t('ai.tabKbIngest'), icon: Collection, desc: t('ai.tabKbIngestDesc') }
 ])
 
-/** 当前选中的 Skill */
-const currentSkill = computed(() => tabs.value.find(t => t.key === tab.value) || tabs.value[0])
+/** 当前选中的 Skill；`chat` 是默认态（不在 tabs 里），单独兜一个虚拟项 */
+const currentSkill = computed(() => tabs.value.find(t => t.key === tab.value)
+  || { key: 'chat', label: t('ai.tabChat'), icon: ChatDotRound, desc: t('ai.tabChatDesc') })
 
 // ===== 插件技能（设置 → 插件中心安装的声明式扩展包）=====
-// 它们**不是**内置 tab：数量和名字都由安装的插件决定，装完即出现、卸载即消失。
-// 所以走「弹出运行窗」这条路 —— 运行表单与插件中心共用 PluginSkillRun，
-// 上下文直接继承面板当前选中的连接/库，用户不用再选第二遍。
+// 它们**不是**内置 tab：数量和名字都由装了什么决定。选中后既不弹窗也不切页 ——
+// 提示词由后端拼进 system（plugins::augment_system），之后每一轮对话都按它的要求作答。
+// 这样「所有技能都用对话完成」，用户不用学第二套表单。
 const pluginSkills = ref([])
-const pluginRunOpen = ref(false)
-const pluginRunItem = ref(null)
+/** 已选技能（跨卸载保留）：`[{ id, name, description }]` */
+const pickedSkills = toRef(_ps, 'pickedSkills')
 /** 上次拉清单的时刻：打开下拉会顺带刷新（刚装的插件要能马上看到），5 秒内不重复请求 */
 let pluginLoadedAt = 0
 const loadPluginSkills = async (force = false) => {
@@ -732,13 +753,40 @@ const loadPluginSkills = async (force = false) => {
   try {
     const data = await listPlugins()
     pluginSkills.value = (data?.items || []).filter((p) => p.type === 'skill' && p.state === 'enabled')
+    // 插件被卸载/停用后，把已选里的死项摘掉（否则会一直占着 chip、还继续拼 system）
+    const alive = new Set(pluginSkills.value.map((p) => p.id))
+    pickedSkills.value = pickedSkills.value.filter((s) => alive.has(s.id))
   } catch { /* 插件清单拉不到不影响内置技能 */ }
 }
-const openPluginSkill = (item) => {
-  if (!item) return
-  pluginRunItem.value = item
-  pluginRunOpen.value = true
+const pickedIds = computed(() => new Set(pickedSkills.value.map((s) => s.id)))
+const isPicked = (id) => pickedIds.value.has(id)
+/** 选中 / 取消一个插件技能（可多选，点一下切换） */
+const togglePickedSkill = (id) => {
+  const i = pickedSkills.value.findIndex((s) => s.id === id)
+  if (i >= 0) {
+    const gone = pickedSkills.value[i]
+    pickedSkills.value.splice(i, 1)
+    ElMessage.info(t('ai.skillUnpicked', { name: gone.name }))
+    return false
+  }
+  const item = pluginSkills.value.find((p) => p.id === id)
+  if (!item) return false
+  pickedSkills.value.push({ id: item.id, name: item.name, description: item.description || '' })
+  // 技能靠对话生效：在问数/字典这些页里选中的，直接切回自由对话，否则选了也看不到效果
+  if (tab.value !== 'chat') {
+    tab.value = 'chat'
+    ElMessage.success(t('ai.skillPickedChat', { name: item.name }))
+  } else {
+    ElMessage.success(t('ai.skillPicked', { name: item.name }))
+  }
+  return true
 }
+const unpickSkill = (id) => { togglePickedSkill(id) }
+/** 工具条按钮：固定显示 Skills（用户要的是「技能入口」而不是「当前页名」），
+ *  只有切到内置专用页时才在后面补一句它叫什么，避免用户不知道自己在哪 */
+const skillBtnLabel = computed(() => tab.value === 'chat'
+  ? t('ai.skills')
+  : `${t('ai.skills')} · ${currentSkill.value.label}`)
 
 const skillsOpen = ref(false)
 /** 三个下拉互斥：每个下拉都持有 ref，以便其它下拉把它收起 */
@@ -810,13 +858,14 @@ const onSkillVisible = (visible) => {
 }
 /** 选择 Skill：切换能力（下拉自动收起）。返回是否真的切了（斜杠命令用它决定要不要提示） */
 const pickSkill = (key) => {
-  // 插件技能：command 形如 `plugin:<id>` —— 开运行窗，不切 tab
+  // 插件技能：command 形如 `plugin:<id>` —— 勾选/取消（可多选），不切页也不关下拉，
+  // 用户能在一次展开里连点几个
   if (typeof key === 'string' && key.startsWith('plugin:')) {
-    openPluginSkill(pluginSkills.value.find((p) => `plugin:${p.id}` === key))
-    return true
+    return togglePickedSkill(key.slice('plugin:'.length))
   }
   if (!tabs.value.some((x) => x.key === key)) return false
   tab.value = key
+  closeSkillDrop()
   return true
 }
 
@@ -1118,8 +1167,13 @@ const PANEL_CMDS = computed(() => [
   { key: 'editConn', label: t('ai.cmdEditConn'), desc: t('ai.cmdEditConnDesc'), icon: Edit }
 ])
 
-/** 全部命令 = 技能切换（由 tabs 自动派生）+ 面板直达，按分组顺序排列 */
+/** 全部命令 = 技能切换（由 tabs 自动派生）+ 面板直达 + 插件技能，按分组顺序排列 */
 const slashCommands = computed(() => [
+  // 插件技能放最前面：用户按 / 多半就是想选技能，不该先滚过一串页签命令
+  ...pluginSkills.value.map(p => ({
+    key: 'plugin:' + p.id, label: p.name, desc: p.description || '', icon: MagicStick,
+    group: t('ai.pluginSkills'), action: 'plugin', target: p.id
+  })),
   ...tabs.value.filter(sk => sk.key !== 'chat').map(sk => ({
     key: 'tab:' + sk.key, label: sk.label, desc: TAB_DESC.value[sk.key] || '', icon: sk.icon,
     group: t('ai.cmdGroupSkills'), action: 'tab', target: sk.key
@@ -1205,6 +1259,13 @@ const slashFiltered = computed(() => {
 /** 执行选中的命令 */
 const pickSlash = (cmd) => {
   if (!cmd) return
+  // 插件技能：选中/取消（可多选 —— 再按一次 / 继续选，或直接在 Skills 下拉里连点）
+  if (cmd.action === 'plugin') {
+    slashOpen.value = false
+    aiInput.value = ''
+    togglePickedSkill(cmd.target)
+    return
+  }
   slashOpen.value = false
   aiInput.value = ''
   if (cmd.action === 'tab') {
@@ -1903,6 +1964,8 @@ const sendChat = async () => {
     // 知识库范围：null=全部库，[]=本次不注入，[...]=只在这些库里找。
     // 必须随请求发给后端，只在界面上控制等于没控制。
     kbIds: kbIdsForQuery(),
+    // 选中的插件技能：后端把它们的提示词拼进 system（这段对话持续生效，不是一次任务）
+    pluginSkills: pickedSkills.value.map(s => s.id),
     // 落库与续聊：只有本面板带这两个字段（一次性接口不带，否则每点一次按钮
     // 就多一条空会话）。已有会话就续写，没有就让后端建一个并回传 id。
     persist: !chatThreadId.value,
@@ -2698,8 +2761,29 @@ watch([currentModelLabel, kbScopeLabel, () => ctxTables.value.length, () => loca
 .skill-btn-ic { color: var(--dc-primary); }
 /* 与其它控件（上下文 / 模型下拉）保持一致：常规字重，不要加粗 */
 .skill-btn-tx { font-weight: 400; }
+/* 有选中插件技能时按钮本身就是「已启用」的状态指示 */
+.skill-btn.has-pick { border-color: var(--dc-primary); color: var(--dc-primary); }
+.skill-btn-badge {
+  min-width: 15px; height: 15px; padding: 0 4px; border-radius: 8px;
+  background: var(--dc-primary); color: #fff; font-size: 10.5px; line-height: 15px; text-align: center;
+}
 .skill-btn-caret { font-size: 13px; color: var(--dc-text-weak); transition: transform .18s ease; }
 .skill-btn.open .skill-btn-caret { transform: rotate(180deg); }
+
+/* 已选插件技能：输入框正上方的一排 chip（点 × 摘掉，技能在这段对话里持续生效） */
+.picked-skills { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 12px 0; }
+.picked-skill {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 100%;
+  padding: 2px 5px 2px 8px; border-radius: 999px;
+  background: var(--dc-primary-wash); border: 1px solid var(--dc-primary-glow);
+  color: var(--dc-primary); font-size: 11.5px; line-height: 1.7;
+}
+.picked-skill-tx { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.picked-skill-x {
+  display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px;
+  padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--dc-primary); cursor: pointer;
+}
+.picked-skill-x:hover { background: var(--dc-primary); color: #fff; }
 
 /* 下拉弹层样式（小标题 / 条目 / 选中态 / 数据源层级的图标与引导线）统一放在
    src/styles/index.css：弹层被 teleport 到 body，写在本组件的 scoped 块里根本命不中。 */
@@ -2850,6 +2934,9 @@ watch([currentModelLabel, kbScopeLabel, () => ctxTables.value.length, () => loca
 .welcome-card:hover .welcome-card-ic { background: var(--dc-bg-card); }
 .welcome-card-tx { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .welcome-card-name { font-size: 13px; font-weight: 600; }
+/* 插件技能卡片：勾上后整卡描主色（与下拉里的勾选状态一致） */
+.welcome-card.is-on { border-color: var(--dc-primary); background: var(--dc-primary-wash); }
+.welcome-card-check { align-self: center; margin-left: auto; flex-shrink: 0; color: var(--dc-primary); }
 /* 描述最多两行：卡片更饱满，也避免长描述把列宽撑歪 */
 .welcome-card-desc {
   font-size: 12px; line-height: 1.5; color: var(--dc-text-weak);

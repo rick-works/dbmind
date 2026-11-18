@@ -3,13 +3,51 @@
   "updatedAt": "2026-11-18",
   "plugins": [
     {
+      "id": "err-diagnose",
+      "type": "skill",
+      "name": {
+        "zh": "报错诊断",
+        "en": "Error Diagnosis"
+      },
+      "version": "1.0.0",
+      "author": "DBMind",
+      "description": {
+        "zh": "贴上报错与 SQL，判断是语法、权限、连接、类型还是超时；给出按概率排序的排查步骤与改法。",
+        "en": "Paste the error and the SQL: tell syntax from permissions, connectivity, types or timeouts, with ranked checks and a fix."
+      },
+      "homepage": "https://www.dbmind.top/#plugins",
+      "needsContext": true,
+      "sha256": "85102947e52e44846c55d42f79a514d5f3489a1830249dc6c269098c216bdd8d",
+      "size": 4445,
+      "download": "https://www.dbmind.top/plugins/packages/err-diagnose-1.0.0.zip"
+    },
+    {
+      "id": "sql-explain",
+      "type": "skill",
+      "name": {
+        "zh": "SQL 讲解",
+        "en": "Explain SQL"
+      },
+      "version": "1.0.0",
+      "author": "DBMind",
+      "description": {
+        "zh": "把一条 SQL 讲清楚：整体意图、逐句子句、隐含假设与坑（NULL / 隐式转换 / 分页 / 时区），最后给可读性改写。",
+        "en": "Explain a query: intent, clause by clause, hidden assumptions and traps (NULLs, implicit casts, paging, time zones), plus a readability rewrite."
+      },
+      "homepage": "https://www.dbmind.top/#plugins",
+      "needsContext": true,
+      "sha256": "f73dff024bfa8c82c83b7b43e7ba0bbf5027670cc8f71cc75f189f47ae09babc",
+      "size": 4407,
+      "download": "https://www.dbmind.top/plugins/packages/sql-explain-1.0.0.zip"
+    },
+    {
       "id": "sql-review",
       "type": "skill",
       "name": {
         "zh": "SQL 审查",
         "en": "SQL Review"
       },
-      "version": "1.0.0",
+      "version": "1.0.1",
       "author": "DBMind",
       "description": {
         "zh": "按性能、正确性、可维护性三档逐条审查 SQL，给出风险等级与可直接替换的改写版本。",
@@ -17,9 +55,9 @@
       },
       "homepage": "https://www.dbmind.top/#plugins",
       "needsContext": true,
-      "sha256": "e36eccee069545c48bedf80c14ba2c9f4e7b05fe422b2e150e59075409f33399",
-      "size": 2166,
-      "download": "https://www.dbmind.top/plugins/packages/sql-review-1.0.0.zip"
+      "sha256": "5248d8eb12220a6d9d01e32030128eb6deeac1e6ba11f0c8a87ba5281535e8d1",
+      "size": 3453,
+      "download": "https://www.dbmind.top/plugins/packages/sql-review-1.0.1.zip"
     },
     {
       "id": "table-design-check",
@@ -28,7 +66,7 @@
         "zh": "表设计体检",
         "en": "Table Design Check"
       },
-      "version": "1.0.0",
+      "version": "1.0.1",
       "author": "DBMind",
       "description": {
         "zh": "针对一张表的真实结构，检查主键/索引/字段类型/空值/命名，给出改造 SQL 与风险提示。",
@@ -36,9 +74,9 @@
       },
       "homepage": "https://www.dbmind.top/#plugins",
       "needsContext": true,
-      "sha256": "bae88c729b6fccdc631ab2e3f4726c229a0ce994ef216c622675b2aa42a3f587",
-      "size": 2508,
-      "download": "https://www.dbmind.top/plugins/packages/table-design-check-1.0.0.zip"
+      "sha256": "4e0ad673f3fcfcc67ffa1942996bc44a53d43d5f99242b17120be00097c64099",
+      "size": 3834,
+      "download": "https://www.dbmind.top/plugins/packages/table-design-check-1.0.1.zip"
     }
   ]
 }

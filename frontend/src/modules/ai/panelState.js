@@ -31,6 +31,14 @@ const makeState = () => ({
   ctxDatabase: '',
   ctxSchema: '',
   ctxTables: [],
+  /**
+   * 选中的插件技能（`[{ id, name, description }]`，多选）。
+   *
+   * <p>技能在这里不是「点一次跑一次」的任务，而是这段对话的人格：选中后提示词由后端拼进
+   * system，之后每一轮提问都带着它，直到用户把 chip 摘掉。所以它必须跨卸载保留 ——
+   * 切个页签回来技能就没了，用户会以为「我没选过」。
+   */
+  pickedSkills: [],
 })
 
 export const panelState = reactive({
