@@ -38,6 +38,33 @@ pub trait DialectOps: Sync + Send {
     /// 与 `ConnectionKind::key()` 的区别是：多个类型共用一个族。
     fn family(&self) -> &'static str;
 
+    /// PG 族有没有 `reltuples` 与容量那一族（`pg_total_relation_size` /
+    /// `pg_size_pretty` / `pg_database_size`）。
+    ///
+    /// RisingWave 是 PG 协议的**子集**，这几样都没有 —— 照 PG 拼就直接
+    /// `Failed to bind expression: c.reltuples`，连表清单都打不开。2026-11-19 在实验室
+    /// `lab-risingwave` 上逐项探测过：`relkind` / `relowner` / `has_table_privilege` /
+    /// `pg_get_userbyid` / `obj_description` / `pg_indexes` / `col_description` 都在，
+    /// 缺的正是 `reltuples` 与那三个容量函数。
+    ///
+    /// 返回 false 的方言把这些列改成 null / 空串：界面上留空，行数由前端 COUNT(*) 回填
+    /// （与「拿不到就留空，不拿 0 冒充空表」同一口径），库级统计如实报「未接入」。
+    fn supports_pg_catalog_stats(&self) -> bool {
+        true
+    }
+
+    /// PG 族「这张表/视图对我可见吗」用的权限清单（`has_table_privilege` 的第二个参数）。
+    ///
+    /// 默认七种表级权限，**任意一种**即可见 —— 只授了 INSERT 的表也该在树里找得到。
+    /// 逗号列表是 PG / 金仓支持的写法。
+    ///
+    /// RisingWave 只实现了 `SELECT,INSERT,UPDATE,DELETE` 四种：另外三种会在**执行期**
+    /// 报 `Invalid parameter privilege: unrecognized ...`（不是绑定错误，一行都读不到，
+    /// 症状与「表清单打不开」一样）。真机逐种探测过，别把三种加回去。
+    fn pg_table_visibility_privileges(&self) -> &'static str {
+        "SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER"
+    }
+
     /// 能不能用**一条语句**完成 upsert（原生 upsert）。
     ///
     /// 不能的话调用方回退「先把目标主键读进内存 → 逐行 UPDATE」，行为不变但慢得多。
@@ -937,7 +964,14 @@ pub struct ClickHouseOps;
 // ---------------------------------------------------------------- PostgreSQL 语法族
 
 /// PostgreSQL：`on conflict do update`，行值比较能走索引。
-pub struct PostgresOps;
+///
+/// `risingwave` 是同一个 impl 里的例外：RisingWave 的 `pg_class` 是**裁剪过的视图**，
+/// 没有 `reltuples`，容量那一族（`pg_total_relation_size` / `pg_size_pretty` /
+/// `pg_database_size`）也没实现 —— 照 PG 写会 `Failed to bind expression`，
+/// 整棵表清单都打不开（见 `supports_pg_catalog_stats`）。
+pub struct PostgresOps {
+    pub risingwave: bool,
+}
 
 /// KingbaseES：与 PG 同族，但**行值比较没有验证过能走索引**，保守关掉
 /// （原 `match` 里只列了 `postgresql`，这里如实保留）。
@@ -991,7 +1025,9 @@ static DORIS: DorisOps = DorisOps { starrocks: false };
 /// StarRocks：元数据/DDL 与 Doris 同源，只有用户管理缺席（见 `DorisOps::starrocks`）。
 static STARROCKS: DorisOps = DorisOps { starrocks: true };
 static CLICKHOUSE: ClickHouseOps = ClickHouseOps;
-static POSTGRES: PostgresOps = PostgresOps;
+static POSTGRES: PostgresOps = PostgresOps { risingwave: false };
+/// RisingWave：PG 协议的子集，`pg_class` 缺 `reltuples` 等统计列（见 `PostgresOps`）。
+static RISINGWAVE: PostgresOps = PostgresOps { risingwave: true };
 static KINGBASE: KingbaseOps = KingbaseOps;
 static ORACLE: OracleOps = OracleOps;
 static DM: DmOps = DmOps;
@@ -1027,6 +1063,7 @@ pub fn of(kind: ConnectionKind) -> &'static dyn DialectOps {
         },
         "PostgreSQL" => match kind {
             ConnectionKind::Kingbase => &KINGBASE,
+            ConnectionKind::Risingwave => &RISINGWAVE,
             _ => &POSTGRES,
         },
         "Oracle" => match kind {
@@ -1380,6 +1417,40 @@ mod tests {
         // MySQL 的清单本身按权限收窄，不需要第二道过滤
         assert!(of(ConnectionKind::Mysql).visible_tables().is_none());
         assert!(of(ConnectionKind::Postgresql).visible_tables().is_none());
+
+        // ---- RisingWave：pg_class 没有 reltuples、也没有容量函数 ----
+        // 这几条 SQL 里出现它们就是「打开表清单直接 Failed to bind expression」，
+        // 而错误被上层吞成空白页 —— 只能靠这条单测钉住。
+        let rw_tables = of(ConnectionKind::Risingwave)
+            .tables_in_schema_sql("public")
+            .unwrap_or_default();
+        assert!(!rw_tables.contains("reltuples"), "{rw_tables}");
+        assert!(rw_tables.contains("cast(null as bigint) as rows"), "{rw_tables}");
+        // 权限清单只能是 RW 实现的四种：另三种是**执行期**报错，单测看不出来，
+        // 但把 `Invalid parameter privilege` 挡在发版前。
+        assert!(rw_tables.contains("'SELECT,INSERT,UPDATE,DELETE'"), "{rw_tables}");
+        assert!(!rw_tables.contains("TRUNCATE"), "{rw_tables}");
+        let rw_options = of(ConnectionKind::Risingwave)
+            .table_options_sql("public")
+            .unwrap_or_default();
+        for word in ["reltuples", "pg_total_relation_size", "pg_size_pretty"] {
+            assert!(!rw_options.contains(word), "RisingWave 没有 {word}: {rw_options}");
+        }
+        // 行数/占用留空，注释与属主照旧（真机探测这两样可用）
+        assert!(rw_options.contains("cast(null as text) as rows"), "{rw_options}");
+        assert!(rw_options.contains("obj_description"), "{rw_options}");
+        assert!(of(ConnectionKind::Risingwave).database_stats_sql().is_none());
+        // PG 不受影响：同样的开关对它是开的
+        let pg_options = of(ConnectionKind::Postgresql)
+            .table_options_sql("public")
+            .unwrap_or_default();
+        assert!(pg_options.contains("pg_total_relation_size"), "{pg_options}");
+        assert!(pg_options.contains("greatest(c.reltuples, 0)"), "{pg_options}");
+        let pg_tables = of(ConnectionKind::Postgresql)
+            .tables_in_schema_sql("public")
+            .unwrap_or_default();
+        assert!(pg_tables.contains("nullif(c.reltuples, -1)"), "{pg_tables}");
+        assert!(pg_tables.contains("TRUNCATE,REFERENCES,TRIGGER"), "{pg_tables}");
 
         // ---- 估算行数：只有 MySQL 族有可用统计；0 必须压成 null ----
         let rows = of(ConnectionKind::Mysql)

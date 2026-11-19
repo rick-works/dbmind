@@ -280,6 +280,11 @@ impl DialectOps for PostgresOps {
         pg_column_types(quoted)
     }
     fn database_stats_sql(&self) -> Option<&'static str> {
+        // RisingWave 没有 `pg_database_size` / `pg_size_pretty`：如实报「未接入」，
+        // 别拼一条必炸的 SQL 让整个统计卡片变 500
+        if !self.supports_pg_catalog_stats() {
+            return None;
+        }
         Some(pg_database_stats())
     }
     fn table_comments_sql(&self, quoted: &str) -> Meta {
@@ -305,6 +310,22 @@ impl DialectOps for PostgresOps {
         editor::POSTGRES
     }
 
+    fn supports_pg_catalog_stats(&self) -> bool {
+        // RisingWave：`pg_class` 没有 `reltuples`，也没有 `pg_total_relation_size` /
+        // `pg_size_pretty` / `pg_database_size`（真机逐项探测过，见 trait 上的注释）
+        !self.risingwave
+    }
+
+    fn pg_table_visibility_privileges(&self) -> &'static str {
+        // RisingWave 只认这四种表级权限，TRUNCATE / REFERENCES / TRIGGER 会在执行期报
+        // `Invalid parameter privilege: unrecognized`（见 trait 上的注释）
+        if self.risingwave {
+            "SELECT,INSERT,UPDATE,DELETE"
+        } else {
+            "SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER"
+        }
+    }
+
     fn drop_table_sql(&self, quoted_table: &str) -> String {
         // 目标库里已有视图引用这张表时，裸 drop 直接失败 ⇒ 重同步整张表红灯。
         // `cascade` 连依赖视图一起清掉 —— 表都要重建了，视图本来就该失效。
@@ -312,6 +333,11 @@ impl DialectOps for PostgresOps {
     }
 
     fn table_rows_estimate_sql(&self, _database: &str, schema: &str) -> Option<String> {
+        if !self.supports_pg_catalog_stats() {
+            // RisingWave：没有 reltuples ⇒ 整库同步不按估算行数排序（小表先跑），
+            // 比拼一条必炸的 SQL 强
+            return None;
+        }
         // `reltuples` 未 ANALYZE 时是 -1，按 0 处理；openGauss 目录同名，直接共用
         let schema = schema.replace('\'', "''");
         Some(format!(
@@ -634,11 +660,21 @@ fn pg_rename_object_sql(
 /// 表注释 —— 对象清单页一屏能看到表有多大、归谁。
 fn pg_table_options(ops: &dyn DialectOps, database: &str) -> String {
     let db = ops.literal(database);
+    // 行数与占用都来自统计（`reltuples` / `pg_total_relation_size` + `pg_size_pretty`）；
+    // 没有这些的方言（RisingWave）只能给 null —— 列名保持不变，前端按「没拿到」跳过。
+    let (rows_col, size_col) = if ops.supports_pg_catalog_stats() {
+        (
+            "greatest(c.reltuples, 0)::bigint::text as rows",
+            "pg_size_pretty(pg_total_relation_size(c.oid)) as size",
+        )
+    } else {
+        ("cast(null as text) as rows", "cast(null as text) as size")
+    };
     format!(
         "select c.relname as table_name, \
-         greatest(c.reltuples, 0)::bigint::text as rows, \
+         {rows_col}, \
          pg_get_userbyid(c.relowner) as owner, \
-         pg_size_pretty(pg_total_relation_size(c.oid)) as size, \
+         {size_col}, \
          coalesce(obj_description(c.oid, 'pg_class'), '') as comment \
          from pg_class c join pg_namespace n on n.oid = c.relnamespace \
          where n.nspname = {db} and c.relkind in ('r','p')"
@@ -675,20 +711,28 @@ fn pg_schema_filter(ops: &dyn DialectOps, schema: Option<&str>, fallback: &str) 
 /// 不要用 0 冒充「空表」。精确行数由前端展开后的批量 COUNT(*) 回填。
 ///
 /// `pg_class` 同样是公开目录 —— 不加权限判断就会把「这个账号一张都读不了」的表/视图
-/// 列出来（实测低权限账号看到了没授过任何权限的表与视图）。判据是「七种表级权限里
+/// 列出来（实测低权限账号看到了没授过任何权限的表与视图）。判据是「表级权限里
 /// **任意一种**」：只授了 INSERT 的表也应当能看到，只看 SELECT 会把它藏起来（那样更糟：
-/// 用户明明能写，却在树里找不到）。逗号列表是 `has_table_privilege` 支持的写法。
+/// 用户明明能写，却在树里找不到）。具体清单按方言给（RisingWave 只有 DML 四种，
+/// 见 [`DialectOps::pg_table_visibility_privileges`]）。
 fn pg_tables_in_schema(ops: &dyn DialectOps, schema: &str) -> String {
+    // RisingWave 的 `pg_class` 没有 `reltuples` ⇒ 这一列连「选中」都不行，
+    // 整棵表清单 `Failed to bind expression`。改成 null 交给前端 COUNT(*) 回填。
+    let rows_col = if ops.supports_pg_catalog_stats() {
+        "nullif(c.reltuples, -1)::bigint as rows"
+    } else {
+        "cast(null as bigint) as rows"
+    };
     format!(
         "select c.relname as name, \
          case when c.relkind = 'v' then 'VIEW' else 'BASE TABLE' end as type, \
-         nullif(c.reltuples, -1)::bigint as rows \
+         {rows_col} \
          from pg_class c join pg_namespace n on n.oid = c.relnamespace \
          where n.nspname = {} and c.relkind in ('r','p','v','f') \
-           and has_table_privilege(c.oid, \
-             'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') \
+           and has_table_privilege(c.oid, '{}') \
          order by c.relname",
-        ops.literal(schema)
+        ops.literal(schema),
+        ops.pg_table_visibility_privileges()
     )
 }
 
@@ -728,9 +772,9 @@ fn pg_triggers(ops: &dyn DialectOps, schema: Option<&str>) -> Meta {
          join pg_class c on c.oid = t.tgrelid \
          join pg_namespace n on n.oid = c.relnamespace \
          where not t.tgisinternal {filter} \
-           and has_table_privilege(c.oid, \
-             'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') \
-         order by t.tgname"
+           and has_table_privilege(c.oid, '{}') \
+         order by t.tgname",
+        ops.pg_table_visibility_privileges()
     ))
 }
 

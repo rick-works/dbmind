@@ -30,8 +30,11 @@ traits:
 # 巡检 21/23，两处「不支持」是**设计如此**（不是坏）：
 #   · 库级统计 stats → 501（RW 没有 pg_database_size / has_table_privilege）
 #   · 用户详情 user-info → 明确回「尚未接入」（RW 没有 information_schema.table_privileges）
-# 另：RW 的 pg_class 里**没有 reltuples 列**，表清单/表选项改走不查行数的写法
-#     （见 dialect.rs 的 risingwave_pg_subset 分支），行数由前端 COUNT(*) 回填。
+# 另：RW 的 pg_class 里**没有 reltuples 列**，也没有 pg_total_relation_size /
+#     pg_size_pretty / pg_database_size；表级权限只认 SELECT/INSERT/UPDATE/DELETE
+#     （TRUNCATE/REFERENCES/TRIGGER 执行期报 Invalid parameter privilege）。
+#     ⇒ dialect_ops 里由 supports_pg_catalog_stats / pg_table_visibility_privileges
+#     两个能力开关兜住，行数/占用留空、由前端 COUNT(*) 回填。
 supportLevel: operate
 capabilities:
   queryExecution: true
