@@ -58,10 +58,43 @@ const MAX_ZIP_BYTES: u64 = 8 * 1024 * 1024;
 /// 单个文件解压上限，防 zip 炸弹（一个 1 KB 的包解出 4 GB）。
 const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 /// 官网索引：主源 + 镜像（GitHub 直连不稳时 jsDelivr 通常可用；两者都挂就显示「离线」）。
+///
+/// **为什么不是一个 URL**（2026-11-19 用户实测「插件拉不到」）：
+/// `www.dbmind.top` 在 Cloudflare 后面，DNS 一次给**多个** IP，国内网络里其中一部分是
+/// 黑洞（单机实测 `104.21.2.110` 连不上、`172.67.129.27` 正常）。`ureq` 一次只试解析到的
+/// 第一个地址、连不上就失败，不换 IP 重试 —— 于是 curl 抖两下能通、插件中心稳定
+/// `os error 10060`（连接超时）。`cdn.jsdelivr.net` 本身也常被 RST（10054），但它的
+/// fastly / gcore / testingcf 三个镜像在国内可用，内容与 GitHub master 同源。
 const CATALOG_URLS: &[&str] = &[
     "https://www.dbmind.top/plugins/index.json",
+    "https://fastly.jsdelivr.net/gh/rick-works/dbmind@master/website/plugins/index.json",
+    "https://gcore.jsdelivr.net/gh/rick-works/dbmind@master/website/plugins/index.json",
+    "https://testingcf.jsdelivr.net/gh/rick-works/dbmind@master/website/plugins/index.json",
     "https://cdn.jsdelivr.net/gh/rick-works/dbmind@master/website/plugins/index.json",
 ];
+
+/// 官网资源在 jsDelivr 上的等价前缀（按「国内可用性」排序，见 [`CATALOG_URLS`]）。
+const MIRROR_PREFIXES: &[&str] = &[
+    "https://fastly.jsdelivr.net/gh/rick-works/dbmind@master/website/",
+    "https://gcore.jsdelivr.net/gh/rick-works/dbmind@master/website/",
+    "https://testingcf.jsdelivr.net/gh/rick-works/dbmind@master/website/",
+    "https://cdn.jsdelivr.net/gh/rick-works/dbmind@master/website/",
+];
+
+/// 官网资源根（索引里的 `download` 长这样）。
+const SITE_PREFIX: &str = "https://www.dbmind.top/";
+
+/// 一个官网 URL 的候选下载地址：本体 + 各镜像。
+///
+/// 索引里的 `sha256` 与源无关，换镜像不影响完整性校验；不认识的 URL（用户手工填的）
+/// 原样返回一个候选，不做任何替换。
+fn mirror_urls(url: &str) -> Vec<String> {
+    let mut out = vec![url.to_string()];
+    if let Some(rest) = url.strip_prefix(SITE_PREFIX) {
+        out.extend(MIRROR_PREFIXES.iter().map(|base| format!("{base}{rest}")));
+    }
+    out
+}
 
 /// 插件包里**不允许**出现的后缀。命中即拒绝整包 —— 不做「只跳过这个文件」的妥协：
 /// 一个包里出现可执行文件，说明作者的心智模型不是「声明式插件」。
@@ -291,6 +324,44 @@ fn catalog_cache() -> &'static Mutex<Option<(Instant, Value)>> {
     CACHE.get_or_init(|| Mutex::new(None))
 }
 
+/// 同时向所有源要索引，**谁先给出合法 JSON 就用谁**。
+///
+/// 串行试的代价实测过：站点那一跳落在黑洞 IP 上时白等 10 秒超时，插件中心转 12 秒才
+/// 出列表（用户看到的就是「拉不到」）。并发之后最坏只等最慢的那个成功源。
+/// 站点仍排第一 —— 它是权威源（jsDelivr 对 `@master` 有缓存，排在第一位会让新插件延迟可见），
+/// 只是健康时它也最先返回。
+fn fetch_catalog_parallel() -> XResult<Value> {
+    use std::sync::mpsc;
+
+    let (tx, rx) = mpsc::channel::<(&'static str, Result<String, String>)>();
+    for url in CATALOG_URLS {
+        let tx = tx.clone();
+        std::thread::spawn(move || {
+            let result = fetch_text(url).map_err(|e| e.message);
+            let _ = tx.send((url, result));
+        });
+    }
+    drop(tx);
+
+    let mut errs: Vec<String> = Vec::new();
+    for _ in 0..CATALOG_URLS.len() {
+        let Ok((url, result)) = rx.recv() else { break };
+        match result {
+            Ok(text) => match serde_json::from_str::<Value>(&text) {
+                Ok(mut value) => {
+                    if let Some(obj) = value.as_object_mut() {
+                        obj.insert("source".into(), json!(url));
+                    }
+                    return Ok(value);
+                }
+                Err(err) => errs.push(format!("{url}: 索引不是合法 JSON（{err}）")),
+            },
+            Err(msg) => errs.push(format!("{url}: {msg}")),
+        }
+    }
+    Err(XError::internal(errs.join("；")))
+}
+
 /// `GET /api/plugins/catalog` —— 官网插件索引。
 ///
 /// 拉不到**不算错误**（`ok: false` + 错误原因）：插件中心是可选功能，
@@ -301,25 +372,7 @@ pub async fn catalog() -> XResult<Json<Value>> {
             return Ok(Json(value));
         }
     }
-    let fetched = run_blocking(|| {
-        let mut errs: Vec<String> = Vec::new();
-        for url in CATALOG_URLS {
-            match fetch_text(url) {
-                Ok(text) => match serde_json::from_str::<Value>(&text) {
-                    Ok(mut value) => {
-                        if let Some(obj) = value.as_object_mut() {
-                            obj.insert("source".into(), json!(url));
-                        }
-                        return Ok(value);
-                    }
-                    Err(err) => errs.push(format!("{url}: 索引不是合法 JSON（{err}）")),
-                },
-                Err(err) => errs.push(format!("{url}: {}", err.message)),
-            }
-        }
-        Err(XError::internal(errs.join("；")))
-    })
-    .await;
+    let fetched = run_blocking(fetch_catalog_parallel).await;
 
     let value = match fetched {
         Ok(value) => json!({ "ok": true, "data": value }),
@@ -394,7 +447,8 @@ fn catalog_url_of(id: &str) -> XResult<String> {
 
 fn fetch_text(url: &str) -> XResult<String> {
     let resp = ureq::get(url)
-        .timeout(Duration::from_secs(20))
+        // 10 秒：索引只有几 KB，超时基本都是「这个 IP 是黑洞」，早失败好换下一个源
+        .timeout(Duration::from_secs(10))
         .call()
         .map_err(|e| XError::internal(format!("请求失败：{e}")))?;
     let mut text = String::new();
@@ -436,7 +490,25 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 fn install_from_url(id: &str, url: &str, sha256: &str) -> XResult<Value> {
-    let bytes = fetch_bytes(url, MAX_ZIP_BYTES)?;
+    // 站点的某一跳常在黑洞 IP 上（见 CATALOG_URLS 的注释），同一份包逐镜像重试；
+    // 完整性靠索引里的 sha256，换源不影响校验。
+    let mut errs: Vec<String> = Vec::new();
+    let mut got: Option<(String, Vec<u8>)> = None;
+    for candidate in mirror_urls(url) {
+        match fetch_bytes(&candidate, MAX_ZIP_BYTES) {
+            Ok(bytes) => {
+                got = Some((candidate, bytes));
+                break;
+            }
+            Err(err) => errs.push(format!("{candidate}: {}", err.message)),
+        }
+    }
+    let Some((used, bytes)) = got else {
+        return Err(XError::internal(format!(
+            "插件包下载失败：{}",
+            errs.join("；")
+        )));
+    };
     if !sha256.trim().is_empty() {
         let actual = sha256_hex(&bytes);
         if !actual.eq_ignore_ascii_case(sha256.trim()) {
@@ -445,7 +517,7 @@ fn install_from_url(id: &str, url: &str, sha256: &str) -> XResult<Value> {
             )));
         }
     } else {
-        tracing::info!(id, url, "插件索引未提供 sha256，跳过完整性校验");
+        tracing::info!(id, url = %used, "插件索引未提供 sha256，跳过完整性校验");
     }
     install_from_bytes(id, &bytes)
 }
@@ -754,6 +826,26 @@ pub fn augment_system(base: String, ids: &[String], lang: Option<&str>) -> Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 站点 URL 必须能换成镜像（否则「索引拉到了、包下不下来」）；
+    /// 别处的 URL 原样透传，绝不偷偷改写。
+    #[test]
+    fn site_urls_fall_back_to_mirrors() {
+        let urls = mirror_urls("https://www.dbmind.top/plugins/packages/sql-review-1.0.4.zip");
+        assert_eq!(urls.len(), 1 + MIRROR_PREFIXES.len(), "{urls:?}");
+        assert!(urls[0].starts_with("https://www.dbmind.top/"), "{urls:?}");
+        for url in &urls[1..] {
+            assert!(
+                url.ends_with("/website/plugins/packages/sql-review-1.0.4.zip"),
+                "镜像路径必须与站点同构: {url}"
+            );
+        }
+        // 索引源本身也要有一条能用的镜像（cdn.jsdelivr.net 排最后，国内常被 RST）
+        assert!(CATALOG_URLS.iter().any(|u| u.contains("fastly.jsdelivr.net")));
+
+        let other = mirror_urls("https://example.com/a.zip");
+        assert_eq!(other, vec!["https://example.com/a.zip".to_string()]);
+    }
 
     #[test]
     fn id_rules() {
