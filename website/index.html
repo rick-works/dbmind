@@ -1470,6 +1470,32 @@
     <h2 class="sec-title reveal" data-eyebrow="RELEASES">版本</h2>
 
     <div class="rel-timeline">
+      <!-- v2.1.0（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v2.1.0</span>
+            <span class="rel-tag tag-minor">小版本</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-11-19</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>数据源从 17 种扩到 26 种：新增 TiDB、StarRocks、OceanBase、openGauss、Databend、RisingWave、DuckDB、GreatSQL、HighGo、Vastbase，每一种都在真实实例上验过浏览 / SQL / 数据 / 同步；另有 4 种已接入但尚未真机验证的类型默认隐藏，免得你连上去发现一堆边角不能用</b></li>
+            <li><b>新增「插件中心」（设置 → 插件中心）：可安装「技能」插件 —— 一份提示词加一组输入项声明，不含任何可执行文件；支持从官网列表一键安装、从文件安装、启用 / 停用 / 卸载与版本升级，按声明的输入项填好参数即可运行</b></li>
+            <li><b>AI 面板接上 Skills</b>：内置能力与已安装的插件技能都能选，选中的技能跟着这条消息走（对话气泡带技能标签），输入框提示会换成该技能的描述</li>
+            <li><b>AI 同事的记忆与变更记录按连接归属，记事抽屉重做 —— 翻记录时不会再混进别的库的东西</b></li>
+            <li><b>修掉表结构编辑生成垃圾语句的一批问题：改列属性时正则捕获组错位、Doris / StarRocks 的聚合类型与函数默认值被拼成非法 ALTER、StarRocks 列元数据取不到；另修复达梦 DM8 的可用性问题</b></li>
+            <li><b>修复 RisingWave 打开表清单直接报错：它的系统目录是裁剪过的，既没有行数估算列也没有容量函数，表级权限也只有四种 —— 现在这些取不到就留空（行数由前端 COUNT(*) 回填），表清单正常展开</b></li>
+            <li><b>修掉插件中心「可安装列表拉不到」：官网在 Cloudflare 后面，DNS 一次给多个 IP，国内网络里其中一部分连不通（curl 抖两下能过、程序只试第一个地址就报连接超时）。现在索引同时向官网与三个 jsDelivr 中国镜像取、谁先给出合法结果就用谁，插件包下载也逐镜像重试 —— 实测出列表从「12 秒后报错」变成 0.6 秒</b></li>
+            <li><b>新建数据源弹窗改为分类标签页（全部 + 关系型 / 分析型 / 文件型 / NoSQL）并加宽到 4 列；任务中心的状态文案与「查看」还原按任务类型区分</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://gitee.com/rick-works/dbmind/releases/tag/v2.1.0" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://gitee.com/rick-works/dbmind/releases/tag/v2.1.0" target="_blank" rel="noopener">下载 v2.1.0</a>
+          </div>
+        </div>
+      </article>
       <!-- v2.0.28（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -1477,7 +1503,6 @@
           <div class="rel-head">
             <span class="rel-ver">v2.0.28</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-11-16</span>
           </div>
           <ul class="rel-notes">
