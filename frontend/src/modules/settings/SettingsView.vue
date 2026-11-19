@@ -263,6 +263,17 @@
             </div>
           </div>
 
+          <!-- 配了规则却没开「AI 上下文」出口：最容易误解的一处 ——
+               用户以为「配了脱敏就生效」，实际发给模型的样例仍是原值。
+               只提示、不阻止保存（可能真的只想让表格/导出打码），一键就能打开。 -->
+          <div v-if="maskRuleCount > 0 && !maskForm.llm" class="mask-warn">
+            <el-icon class="mask-warn-ic"><WarningFilled /></el-icon>
+            <span class="mask-warn-tx">{{ $t('settings.mask.llmOffWarn', { n: maskRuleCount }) }}</span>
+            <el-button size="small" class="mask-warn-btn" @click="maskForm.llm = true">
+              {{ $t('settings.mask.llmOffFix') }}
+            </el-button>
+          </div>
+
           <!-- AES 密钥：默认给一把，用户可改成自己的口令；同值同密文，拿它可解回原文 -->
           <div class="mask-key">
             <div class="mask-key-title">{{ $t('settings.mask.aesKey') }}</div>
@@ -1383,7 +1394,7 @@ import {
   Connection, Brush, Box,
   FolderOpened, EditPen, DataLine, Download, Operation, Monitor, Plus, Delete,
   CircleCheck, Timer, Pointer, Refresh, Search, Upload, Flag, InfoFilled, Lock, Check, Key,
-  ArrowUp, ArrowDown, Document, DocumentCopy, Coin, Folder, QuestionFilled
+  ArrowUp, ArrowDown, Document, DocumentCopy, Coin, Folder, QuestionFilled, WarningFilled
 } from '@element-plus/icons-vue'
 import AiMark from '../../common/AiMark.vue'
 
@@ -1806,6 +1817,11 @@ const load = async () => {
 const maskForm = ref({ llm: false, mcp: false, grid: false, export: false, groups: [] })
 const maskSaving = ref(false)
 const maskSaved = ref(false)
+
+/// 已配的规则条数（跨分组）：用来提示「配了规则但 AI 上下文出口没开」
+const maskRuleCount = computed(() =>
+  (maskForm.value.groups || []).reduce((n, group) => n + ((group.rules || []).length), 0)
+)
 
 /** 四个出口：key 与后端 `MaskConfig` 字段一一对应 */
 const MASK_CHANNELS = [
@@ -3782,6 +3798,15 @@ watch(visible, (v) => {
 /* 四个出口竖排：一行一个开关，名称与作用范围说明跟在后面 —— 竖排比横排更好扫，
    说明也不会被挤到第二行去（横排时四个挤在一行，最后一个的说明常常折行） */
 .mask-head { display: flex; flex-direction: column; gap: 8px; margin: 2px 0 14px; }
+/* 「配了规则但 AI 上下文出口没开」的提示条：暖橙色，与危险操作的红区分开 */
+.mask-warn {
+  display: flex; align-items: center; gap: 8px;
+  margin: 0 0 14px; padding: 8px 12px; border-radius: 8px;
+  border: 1px solid rgba(230, 162, 60, .42); background: rgba(230, 162, 60, .10);
+}
+.mask-warn-ic { color: #e6a23c; font-size: 15px; }
+.mask-warn-tx { flex: 1; min-width: 0; font-size: 12.5px; color: var(--dc-text); line-height: 1.5; }
+.mask-warn-btn { flex: none; }
 .mask-chan { display: flex; align-items: center; gap: 8px; min-height: 24px; }
 .mask-chan-label { font-size: 13px; color: var(--dc-text); }
 .mask-chan-hint { font-size: 12px; color: var(--dc-text-dim); }

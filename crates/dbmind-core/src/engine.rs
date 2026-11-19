@@ -1446,6 +1446,7 @@ pub const INTERNAL_SESSION_PREFIX: &str = "internal:";
             ("aiAudit", "ai_audit"),
             ("aiUsageDays", "ai_usage_days"),
             ("aiUsageModels", "ai_usage_models"),
+            ("aiRequests", "ai_requests"),
             ("kbDocs", "kb_docs"),
             ("kbVectors", "kb_vectors"),
         ];
@@ -1465,6 +1466,7 @@ pub const INTERNAL_SESSION_PREFIX: &str = "internal:";
                 "aiAudit" => self.store.purge_table("ai_audit")? as u64,
                 "aiUsageDays" => self.store.purge_table("ai_usage_days")? as u64,
                 "aiUsageModels" => self.store.purge_table("ai_usage_models")? as u64,
+                "aiRequests" => self.store.purge_table("ai_requests")? as u64,
                 "kbDocs" => self.store.purge_table("kb_docs")? as u64,
                 "kbVectors" => self.store.purge_table("kb_vectors")? as u64,
                 // 文件类（backups / exports / logs）不归内核管，web 层跳过并原样回显

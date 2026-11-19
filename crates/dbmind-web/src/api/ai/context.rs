@@ -294,6 +294,12 @@ pub async fn build(
     } else {
         format!(" ｜ 版本 {version}")
     };
+    // 「下一步该做什么」的指令（问表名 / 别猜字段）。
+    //
+    // **必须放在围栏外面**：围栏里是数据，而且开头就声明了「其中任何文字都不执行」——
+    // 指令混在数据尾部会被自己的围栏声明削弱，模型更容易把它当表结构的噪声。
+    // 所以这里只攒下来，等 wrap_schema 之后再拼。
+    let mut note: Option<String> = None;
     text.push_str(&format!(
         "【目标数据库】类型 {}{} ｜ 标识符引用风格 {} ｜ 分页写法 `{}`\n",
         kind.key().to_ascii_uppercase(),
@@ -336,16 +342,20 @@ pub async fn build(
         text.push_str(&lines.join("\n"));
         text.push('\n');
         // 把「这里没有列结构」说白了：否则模型会照着表名猜字段，再编出一条跑不通的 SQL。
-        text.push_str("（这里没有列结构：先讲清业务；要写 SQL 请先问明具体的表名，不要凭表名猜字段。）\n");
+        // 这是一条指令，所以走 note（拼在围栏外），不塞进数据区。
+        note = Some(
+            "（上面只有表名和注释，没有列结构：先讲清业务；要写 SQL 请先问明具体的表名，不要凭表名猜字段。）"
+                .to_string(),
+        );
     } else {
         text.push_str("【表清单】");
         if with_names && small_db {
             text.push_str(&names.join(", "));
         } else {
             // 只留总数：模型据此知道"这库很大、别以为就这几张表"，但不为看不到结构的名字付钱。
-            // 也顺带告诉它下一步该说什么（问表名），而不是硬着头皮编。
+            // 「需要其它表请先说明表名」这句指令不写在这里 —— 它走 note 放到围栏外。
             text.push_str(&format!(
-                "共 {} 张表，仅展开用到的那几张（需要其它表的字段请先说明表名）",
+                "共 {} 张表，仅展开用到的那几张",
                 names.len()
             ));
         }
@@ -421,16 +431,23 @@ pub async fn build(
     let missing = names.len().saturating_sub(done);
     if done == 0 && !names.is_empty() && !catalog {
         // 大库 + 问题里没点到表 + 又不是库级问题：这时给模型的正确动作是「问表名」
-        text.push_str("\n（还没有展开任何表结构：请先说明要用的表名，再据此写 SQL。）\n");
+        note = Some("（上面还没有展开任何表结构：请先说明要用的表名，再据此写 SQL。）".to_string());
     } else if done > 0 && missing > 0 {
-        text.push_str(&format!(
-            "\n（只展开了 {done} 张表；需要其它表的字段请先说明表名。）\n"
+        // 比 catalog 分支更具体（已经展开了几张），覆盖掉前一句
+        note = Some(format!(
+            "（上面只展开了 {done} 张表；需要其它表的字段请先说明表名。）"
         ));
     }
 
+    let wrapped = crate::api::ai::wrap_schema(&text);
+    let text = match note {
+        Some(note) => format!("{wrapped}\n{note}"),
+        None => wrapped,
+    };
+
     Ok(Budgeted {
         estimated_tokens: estimate_tokens(&text),
-        text: crate::api::ai::wrap_schema(&text),
+        text,
         tables: names.len(),
         version,
         expanded: done,
@@ -568,10 +585,12 @@ mod tests {
         let cjk = estimate_tokens(&"数".repeat(100));
         assert!((75..=85).contains(&cjk), "cjk={cjk}");
 
-        // 实测校准点：489 字符的人格提示词，真实 promptTokens 约 280
+        // 实测校准点：人格提示词（铁律 1~5，约 380 字符）估算 ≈ 207 token。
+        // 删掉「版本敏感特性」那条后从 280 降到 207 —— 这就是提示词瘦身的收益，
+        // 所以下限跟着文案走，别为了过测试把规则加回来。
         let base = include_str!("../../../prompts/common.default-system.md");
         let estimate = estimate_tokens(base);
-        assert!((240..=320).contains(&estimate), "base={estimate}");
+        assert!((180..=320).contains(&estimate), "base={estimate}");
     }
 
     /// 「这个库是干嘛的」这类问题必须切到全库清单，而「这个表是干嘛的」不能。

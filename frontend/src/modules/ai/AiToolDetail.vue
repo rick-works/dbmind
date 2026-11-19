@@ -3,7 +3,12 @@
        结果里的制表符文本还原成表格，长内容自己滚，不把结论顶出屏幕。 -->
   <div class="td-wrap">
     <div v-if="rows.length" class="td-sec">
-      <div class="td-h">{{ $t('ai.toolArgs') }}</div>
+      <!-- 「参数」是**区块标题**，不是某个参数的名字 —— 后面跟一个条数徽标，
+           否则它长得和下面「键 → 值」的行一模一样，用户会以为这行永远没值 -->
+      <div class="td-h">
+        {{ $t('ai.toolArgs') }}
+        <span class="td-h-n">{{ $t('ai.toolArgsCount', { n: rows.length }) }}</span>
+      </div>
       <div v-for="a in rows" :key="a.key" class="td-row">
         <span class="td-k">{{ a.label }}</span>
         <pre v-if="a.multi" class="td-v td-code">{{ a.text }}</pre>
@@ -117,6 +122,12 @@ const view = computed(() => {
   font-size: 11px; font-weight: 600;
   color: var(--dc-text-weak);
 }
+/* 标题后面的条数徽标：把「这是一个区块标题」和「这是一行参数」分开 */
+.td-h-n {
+  padding: 0 6px; border-radius: 999px;
+  font-size: 10px; font-weight: 500; line-height: 16px;
+  background: var(--dc-bg-hover); color: var(--dc-text-dim);
+}
 .td-bad { color: var(--dc-danger, #d64545); font-weight: 500; }
 /* 一行一个参数：键固定宽（对齐），值占满剩余宽度 */
 .td-row {
@@ -124,7 +135,8 @@ const view = computed(() => {
   gap: 10px; align-items: start;
   font-size: 12px; line-height: 1.6;
 }
-.td-k { color: var(--dc-text-weak); }
+/* 键名比区块标题缩进一点：一眼分得清「参数 / 结果」是章节头，键名才是数据 */
+.td-k { color: var(--dc-text-weak); padding-left: 4px; }
 .td-v { color: var(--dc-text); word-break: break-word; white-space: pre-wrap; }
 /* 底色用 --dc-code-bg（比气泡亮一档的蓝灰）而不是 --dc-bg-deep：
    深色主题下 bg-deep/#14151b 在展开体里像挖了个黑坑（用户反馈「背景不要这么黑」）。 */

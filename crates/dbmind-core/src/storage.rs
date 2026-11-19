@@ -830,7 +830,14 @@ impl Store {
 
     /// 清空白名单表，返回删除的行数。
     pub fn purge_table(&self, table: &str) -> Result<usize> {
-        const ALLOWED: &[&str] = &["ai_audit", "ai_usage_days", "ai_usage_models", "kb_docs", "kb_vectors"];
+        const ALLOWED: &[&str] = &[
+            "ai_audit",
+            "ai_usage_days",
+            "ai_usage_models",
+            "ai_requests",
+            "kb_docs",
+            "kb_vectors",
+        ];
         if !ALLOWED.contains(&table) {
             return Err(DbMindError::new(
                 ErrorCode::StorageFailed,
@@ -1273,6 +1280,42 @@ pub struct AiUsageRow {
     pub active_days: u64,
 }
 
+/// 保留多少条请求快照：一次智能体对话最多十几轮，200 条够回看很久；
+/// 每条可能带着完整库结构（几十 KB），再多只是白占磁盘。
+pub const AI_REQUEST_KEEP: i64 = 200;
+
+/// 「请求记录」列表的一行（不含正文：正文几十 KB，列表用不到）。
+#[derive(Debug, Clone, Default)]
+pub struct AiRequestRow {
+    pub id: i64,
+    /// 本地时间 `YYYY-MM-DD HH:MM:SS`（界面显示时截掉年份）
+    pub ts: String,
+    /// 对话 / 智能体
+    pub kind: String,
+    pub model: String,
+    /// 这次 body 的总字符数（messages + tools）
+    pub chars: u64,
+    /// 估算 token（与上下文预算同一把尺子）
+    pub tokens: u64,
+    /// system 提示词字符数
+    pub sys_chars: u64,
+    /// messages 条数
+    pub msgs: u64,
+    /// 是否带 tools（智能体才有）
+    pub has_tools: bool,
+}
+
+/// 一条请求的全文（列表里点开的那一条）。
+#[derive(Debug, Clone, Default)]
+pub struct AiRequestFull {
+    pub row: AiRequestRow,
+    pub system: String,
+    /// messages 的 JSON 文本（前端自己解析，避免在库里再存一份结构）
+    pub messages: String,
+    /// tools 的 JSON 文本（没有就是 None）
+    pub tools: Option<String>,
+}
+
 impl Store {
     /// 读 AI 设置。**返回 None 表示库里从来没有过**（不是"配过但为空"）——
     /// 调用方靠这个区分「要不要从旧 json 导入」和「给什么默认值」。
@@ -1507,6 +1550,109 @@ impl Store {
             row.get::<_, i64>(0)
         })?;
         Ok(count.max(0) as u64)
+    }
+
+    /// 记一条请求快照（每次真正发给模型的 body），并裁剪到最近 `AI_REQUEST_KEEP` 条。
+    ///
+    /// 落库而不是只留内存：用户要的是「重启后还能回看这次到底发了什么」。
+    /// 正文里有完整库结构与历史，属于本机数据 —— 界面写明「注意别外传」，
+    /// 「清空记录」按钮就是这条链路的出口。
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_ai_request(
+        &self,
+        kind: &str,
+        model: &str,
+        system: &str,
+        messages: &str,
+        tools: Option<&str>,
+        chars: u64,
+        tokens: u64,
+        msgs: u64,
+    ) -> Result<i64> {
+        let conn = self.lock();
+        conn.execute(
+            "INSERT INTO ai_requests \
+                (ts, kind, model, chars, tokens, msgs, sys_chars, has_tools, system, messages, tools) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                now_secs(),
+                kind,
+                model,
+                chars as i64,
+                tokens as i64,
+                msgs as i64,
+                system.chars().count() as i64,
+                tools.is_some() as i64,
+                system,
+                messages,
+                tools
+            ],
+        )?;
+        let id = conn.last_insert_rowid();
+        // 裁剪按自增 id（不依赖 ts 的格式是否正确）：留最新 KEEP 条
+        conn.execute(
+            "DELETE FROM ai_requests WHERE id <= (SELECT COALESCE(MAX(id), 0) FROM ai_requests) - ?1",
+            params![AI_REQUEST_KEEP],
+        )?;
+        Ok(id)
+    }
+
+    /// 请求快照列表（新的在前，不带正文）。
+    pub fn ai_requests(&self, limit: u64) -> Result<Vec<AiRequestRow>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, ts, kind, model, chars, tokens, sys_chars, msgs, has_tools \
+             FROM ai_requests ORDER BY id DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit.clamp(1, 1000) as i64], |row| {
+            Ok(AiRequestRow {
+                id: row.get(0)?,
+                ts: row.get(1)?,
+                kind: row.get(2)?,
+                model: row.get(3)?,
+                chars: row.get::<_, i64>(4)?.max(0) as u64,
+                tokens: row.get::<_, i64>(5)?.max(0) as u64,
+                sys_chars: row.get::<_, i64>(6)?.max(0) as u64,
+                msgs: row.get::<_, i64>(7)?.max(0) as u64,
+                has_tools: row.get::<_, i64>(8)? != 0,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// 单条请求的全文（列表里点开的那一条）。
+    pub fn ai_request_one(&self, id: i64) -> Result<Option<AiRequestFull>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, ts, kind, model, chars, tokens, sys_chars, msgs, has_tools, \
+                    system, messages, tools \
+             FROM ai_requests WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![id], |row| {
+            Ok(AiRequestFull {
+                row: AiRequestRow {
+                    id: row.get(0)?,
+                    ts: row.get(1)?,
+                    kind: row.get(2)?,
+                    model: row.get(3)?,
+                    chars: row.get::<_, i64>(4)?.max(0) as u64,
+                    tokens: row.get::<_, i64>(5)?.max(0) as u64,
+                    sys_chars: row.get::<_, i64>(6)?.max(0) as u64,
+                    msgs: row.get::<_, i64>(7)?.max(0) as u64,
+                    has_tools: row.get::<_, i64>(8)? != 0,
+                },
+                system: row.get(9)?,
+                messages: row.get(10)?,
+                tools: row.get(11)?,
+            })
+        })?;
+        Ok(rows.next().transpose()?)
+    }
+
+    /// 清空请求快照，返回删掉的条数。
+    pub fn clear_ai_requests(&self) -> Result<usize> {
+        let conn = self.lock();
+        Ok(conn.execute("DELETE FROM ai_requests", [])?)
     }
 }
 
@@ -2737,6 +2883,15 @@ pub(crate) fn new_id(prefix: &str) -> String {
     format!("{prefix}_{nanos:x}{seq:04x}")
 }
 
+/// 本地时间到秒（`2026-11-19 20:18:54`）。
+///
+/// 请求记录用它而不是 `now_iso()`：那个是给「机器读」的 RFC3339，
+/// 界面上要显示的是人能一眼看懂的时间，截年份就短了（前端 `slice(5)`）。
+pub(crate) fn now_secs() -> String {
+    chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
+/// 带毫秒与时区的 RFC3339（机器读的时间戳：审计、缓存时间）。
 pub(crate) fn now_iso() -> String {
     chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
@@ -2854,6 +3009,27 @@ CREATE TABLE IF NOT EXISTS ai_audit (
     prompt TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_ai_audit_time ON ai_audit(time);
+
+-- 请求快照：每次真正发给模型的 system + messages（排查「token 都花在哪」用）。
+-- 原来只在进程内存里，重启就没了；用户要能回看，所以落成表，靠业务层裁剪
+-- 保留最近 200 条（见 AI_REQUEST_KEEP）。正文含完整库结构，是本机数据 ——
+-- 界面上写明「注意别外传」，「清空记录」就是它的出口。
+-- 列表需要的几个数（字符数 / 条数 / 是否带工具）在写入时算好存下来：
+-- 列表页不该为了显示「8 条消息」去解析一遍几十 KB 的 JSON。
+CREATE TABLE IF NOT EXISTS ai_requests (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts        TEXT NOT NULL DEFAULT '',
+    kind      TEXT NOT NULL DEFAULT '',
+    model     TEXT NOT NULL DEFAULT '',
+    chars     INTEGER NOT NULL DEFAULT 0,
+    tokens    INTEGER NOT NULL DEFAULT 0,
+    msgs      INTEGER NOT NULL DEFAULT 0,
+    sys_chars INTEGER NOT NULL DEFAULT 0,
+    has_tools INTEGER NOT NULL DEFAULT 0,
+    system    TEXT NOT NULL DEFAULT '',
+    messages  TEXT NOT NULL DEFAULT '[]',
+    tools     TEXT
+);
 
 -- 团队知识：术语表 + 采纳示例（以前是一个 ai-knowledge.json 里的两个数组）。
 -- 上限由业务层把关（200 / 300）：这不是数据库表越大越好，是一份"给提示词用的速查表"，
@@ -3329,6 +3505,48 @@ mod tests {
         s.bump_ai_usage("m1", &today, 100, 50, 150).unwrap();
         s.bump_ai_usage("m2", &today, 30, 20, 50).unwrap();
         assert_eq!(s.ai_usage_month_tokens().unwrap(), 200);
+    }
+
+    #[test]
+    fn 请求快照落库只留最近若干条并可按id取回全文() {
+        let s = store();
+        assert!(s.ai_requests(200).unwrap().is_empty());
+        // 写入超额（KEEP+5）：裁剪必须按自增 id，留最新的一批
+        let total = AI_REQUEST_KEEP as usize + 5;
+        for i in 0..total {
+            let messages = format!(r#"[{{"role":"user","content":"q{i}"}}]"#);
+            s.insert_ai_request(
+                "对话",
+                "m1",
+                "sys",
+                &messages,
+                None,
+                messages.chars().count() as u64,
+                i as u64,
+                1,
+            )
+            .unwrap();
+        }
+        let rows = s.ai_requests(200).unwrap();
+        assert_eq!(rows.len(), AI_REQUEST_KEEP as usize, "库里只该留 KEEP 条");
+        // 新的在前，且被裁掉的是最早那几条
+        assert_eq!(rows[0].tokens, (total - 1) as u64);
+        assert_eq!(rows[0].sys_chars, 3);
+        assert_eq!(rows[0].msgs, 1);
+        assert!(!rows[0].has_tools);
+
+        let full = s.ai_request_one(rows[0].id).unwrap().expect("最新一条能取回");
+        assert_eq!(full.system, "sys");
+        assert!(full.messages.contains(&format!("q{}", total - 1)));
+        assert!(full.tools.is_none());
+        // 被裁掉的那条查不到
+        assert!(s
+            .ai_request_one(rows[0].id - AI_REQUEST_KEEP - 1)
+            .unwrap()
+            .is_none());
+
+        assert_eq!(s.clear_ai_requests().unwrap(), AI_REQUEST_KEEP as usize);
+        assert!(s.ai_requests(200).unwrap().is_empty());
     }
 
     #[test]

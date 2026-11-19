@@ -307,6 +307,13 @@ export const clearCaches = (keys) => http.post('/api/dbmind/cache', { keys }).th
 // 插件是**声明式扩展包**（manifest + 提示词），装在 ~/.dbmind/plugins/<id>/，
 // 不带任何可执行文件 —— 后端解压时按后缀拦截（见 api/plugins.rs）。
 // 安装是同步长请求（下载 + 解压，单包限 8 MB），超时给足。
+// 「这次到底发给模型什么了」：后端内存里留的请求快照（进程重启即清空，不落盘）
+export const listAiRequests = () => http.get('/api/ai/requests', { timeout: 15000 }).then(r => r.data)
+
+export const getAiRequest = (id) => http.get(`/api/ai/requests/${id}`, { timeout: 15000 }).then(r => r.data)
+
+export const clearAiRequests = () => http.delete('/api/ai/requests', { timeout: 15000 }).then(r => r.data)
+
 export const listPlugins = () => http.get('/api/plugins', { timeout: 15000 }).then(r => r.data)
 // 官网索引：拉不到返回 { ok: false, error }（不是 HTTP 错误，界面显示「离线」而不是弹报错）
 export const getPluginCatalog = () => http.get('/api/plugins/catalog', { timeout: 30000 }).then(r => r.data)

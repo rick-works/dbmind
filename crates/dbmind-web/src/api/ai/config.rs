@@ -466,7 +466,16 @@ fn temperature_rejected(message: &str) -> bool {
 /// 第一次发仍带 temperature（大多数模型都认，压低温度对稳定输出有价值）；
 /// 若被上游 400 且错误提到 temperature，则去掉该参数**原地重试一次**，
 /// 并把该模型记进进程内黑名单，之后再发就直接省掉它。
-fn post_chat(url: &str, model: &ModelEntry, body: &mut Value, accept: &str) -> XResult<ureq::Response> {
+fn post_chat(
+    kind: &'static str,
+    url: &str,
+    model: &ModelEntry,
+    body: &mut Value,
+    accept: &str,
+) -> XResult<ureq::Response> {
+    // 快照要在**重试循环之前**记：容错重试只是把 temperature 摘掉，
+    // 用户想看的是「这次到底发了什么」，记一次就够，别记成两条。
+    record_sent(kind, body);
     let key = format!("{}|{}", model.base_url.trim_end_matches('/'), model.model);
     let mut strip = no_temperature_models()
         .lock()
@@ -505,6 +514,102 @@ fn post_chat(url: &str, model: &ModelEntry, body: &mut Value, accept: &str) -> X
         }
     }
     Err(last_error.unwrap_or_else(|| XError::internal("模型服务请求失败（重试后仍无响应）")))
+}
+
+// ---------------------------------------------------------------------------
+// 请求快照：每次真正发给模型的 body 落一份进库（最近 200 条，重启不丢）
+// ---------------------------------------------------------------------------
+
+/// 列表最多取多少条（与 `dbmind_core::storage::AI_REQUEST_KEEP` 一致：库里也只留这么多）。
+const SENT_LIMIT: u64 = 200;
+
+/// 记一条快照。
+///
+/// 以前只留在进程内存里、重启就没了；用户要的是「重启后还能回看这次到底发了什么」，
+/// 所以落库（`ai_requests`，写入时按 `AI_REQUEST_KEEP` 裁剪）。
+/// 正文含完整库结构与历史 —— 界面写明「注意别外传」，
+/// 「清空记录」（`DELETE /api/ai/requests`）是它的出口。
+fn record_sent(kind: &'static str, body: &Value) {
+    let Some(store) = dbmind_core::global_store() else {
+        return;
+    };
+    let messages = body.get("messages").cloned().unwrap_or_else(|| json!([]));
+    let system = messages
+        .as_array()
+        .and_then(|list| list.first())
+        .filter(|m| m.get("role").and_then(Value::as_str) == Some("system"))
+        .and_then(|m| m.get("content"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let tools = body.get("tools").filter(|t| !t.is_null()).cloned();
+    let messages_text = messages.to_string();
+    let tools_text = tools.as_ref().map(|t| t.to_string());
+    // 字符数与条数在写入时算好存下来：列表页不该为了显示「8 条消息」
+    // 去把几十 KB 的 JSON 再解析一遍
+    let chars = messages_text.chars().count()
+        + tools_text.as_deref().map(|t| t.chars().count()).unwrap_or(0);
+    let tokens = crate::api::ai::context::estimate_tokens(&messages_text);
+    let msgs = messages.as_array().map(|a| a.len()).unwrap_or(0);
+    let model = body.get("model").and_then(Value::as_str).unwrap_or_default();
+    let _ = store.insert_ai_request(
+        kind,
+        model,
+        &system,
+        &messages_text,
+        tools_text.as_deref(),
+        chars as u64,
+        tokens as u64,
+        msgs as u64,
+    );
+}
+
+/// 列表（不带正文）：前端那一列只看时间/类型/模型/体量。
+pub fn sent_list() -> Value {
+    let Some(store) = dbmind_core::global_store() else {
+        return json!([]);
+    };
+    json!(store
+        .ai_requests(SENT_LIMIT)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|r| json!({
+            "id": r.id, "ts": r.ts, "kind": r.kind, "model": r.model,
+            "chars": r.chars, "tokens": r.tokens,
+            "system": r.sys_chars,
+            "messages": r.msgs,
+            "tools": r.has_tools,
+        }))
+        .collect::<Vec<_>>())
+}
+
+/// 单条全文：system + 完整 messages（智能体还带工具定义）。
+pub fn sent_one(id: i64) -> Value {
+    let Some(store) = dbmind_core::global_store() else {
+        return Value::Null;
+    };
+    let Some(full) = store.ai_request_one(id).unwrap_or_default() else {
+        return Value::Null;
+    };
+    // 库里存的是 JSON 文本：在这里解析回结构，前端不用关心存储格式
+    let messages: Value = serde_json::from_str(&full.messages).unwrap_or_else(|_| json!([]));
+    let tools: Value = match full.tools.as_deref() {
+        Some(text) if !text.trim().is_empty() => {
+            serde_json::from_str(text).unwrap_or(Value::Null)
+        }
+        _ => Value::Null,
+    };
+    json!({
+        "id": full.row.id, "ts": full.row.ts, "kind": full.row.kind, "model": full.row.model,
+        "chars": full.row.chars, "tokens": full.row.tokens,
+        "system": full.system, "messages": messages, "tools": tools,
+    })
+}
+
+pub fn sent_clear() {
+    if let Some(store) = dbmind_core::global_store() {
+        let _ = store.clear_ai_requests();
+    }
 }
 
 /// 读响应体（`into_string` 给的是 `io::Error`，与 ureq 的错误不是一回事）。
@@ -597,7 +702,7 @@ pub fn chat_with_usage(
 ) -> XResult<(String, Option<TokenUsage>)> {
     let url = endpoint(&model.base_url, "/chat/completions");
     let mut body = request_body(model, messages_json(system, messages), false);
-    let response = post_chat(&url, model, &mut body, "application/json")?;
+    let response = post_chat("对话", &url, model, &mut body, "application/json")?;
     let text = read_body(response)?;
     let value: Value = serde_json::from_str(&text).map_err(|e| {
         XError::internal(format!(
@@ -645,7 +750,7 @@ pub fn chat_tools(model: &ModelEntry, system: &str, messages: &[Value], tools: &
         body["tools"] = tools.clone();
         body["tool_choice"] = json!("auto");
     }
-    let response = post_chat(&url, model, &mut body, "application/json")?;
+    let response = post_chat("智能体", &url, model, &mut body, "application/json")?;
     let text = read_body(response)?;
     let value: Value = serde_json::from_str(&text).map_err(|e| {
         XError::internal(format!(
@@ -714,7 +819,7 @@ pub fn chat_tools_stream(
         body["tool_choice"] = json!("auto");
     }
     body["stream_options"] = json!({ "include_usage": true });
-    let response = post_chat(&url, model, &mut body, "text/event-stream")?;
+    let response = post_chat("智能体", &url, model, &mut body, "text/event-stream")?;
 
     let reader = BufReader::new(response.into_reader());
     let mut content = String::new();
@@ -821,7 +926,7 @@ pub fn chat_stream(
     // 让上游在**流末尾**追加一个只含 usage 的分片（OpenAI 兼容协议）。
     // 不认这个字段的服务端会忽略它 —— 那时就只有调用次数、没有 token 数（如实显示"未提供"）。
     body["stream_options"] = json!({ "include_usage": true });
-    let response = post_chat(&url, model, &mut body, "text/event-stream")?;
+    let response = post_chat("对话", &url, model, &mut body, "text/event-stream")?;
 
     let reader = BufReader::new(response.into_reader());
     let mut produced = false;

@@ -173,6 +173,9 @@
                 </template>
                 <!-- 流式回复尚未产出内容：显示动态三点，而不是一个空气泡 -->
                 <template v-else-if="!hasBody(m) && m.streaming">
+                  <!-- 文案在前、跳动的三点在后（用户：「前面三个点挪后面去」）；
+                       文案本身不带省略号，否则末尾又多出三个点 -->
+                  <span class="wait-tx">{{ $t('ai.thinkingNow') }}</span>
                   <span class="dot"></span><span class="dot"></span><span class="dot"></span>
                   <span v-if="waitingSec >= 3" class="wait">{{ $t('ai.waited', { s: waitingSec }) }}</span>
                 </template>
@@ -255,11 +258,17 @@
                     </template>
                   </el-dropdown>
                 </div>
-                <!-- 流式输出中：明确提示「还在生成」，避免用户误以为已经答完；可随时停下 -->
+                <!-- 流式输出中：明确提示「还在生成」，避免用户误以为已经答完；可随时停下。
+                     一条安静的状态行：「生成中」+ 三个跳动的点（点跟在字后面，
+                     文字本身不再带省略号 —— 否则「生成中…•••」重复），
+                     右侧一个淡红的胶囊「■ 停止」 -->
                 <div v-if="m.role !== 'user' && m.streaming && hasBody(m)" class="streaming-hint">
-                  <span class="dot"></span><span class="dot"></span><span class="dot"></span>
                   <span class="txt">{{ $t('ai.generating') }}</span>
-                  <el-button size="small" text type="primary" class="stop-gen" @click="stopStream">{{ $t('ai.stopGen') }}</el-button>
+                  <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+                  <button type="button" class="sh-stop" :title="$t('ai.stopGen')" @click="stopStream">
+                    <span class="sh-stop-sq" />
+                    <span class="sh-stop-tx">{{ $t('ai.stopShort') }}</span>
+                  </button>
                 </div>
                 <!-- 服务端提示（预算降级等）：挂在回答下面，不混进正文 -->
                 <div v-if="m.notice" class="msg-notice">{{ m.notice }}</div>
@@ -308,8 +317,14 @@
                      上游没回 usage 就整块不渲染；全项目统一右对齐 -->
                 <AiUsageNote :usage="m.usage" align="right" />
               </div>
-              <!-- 操作条：气泡下方一排小图标（编辑后重发 / 复制），悬停才出现 -->
+              <!-- 操作条：气泡下方一排小图标（请求记录 / 编辑后重发 / 复制），悬停才出现 -->
               <div v-if="m.role === 'user' && editingIndex !== i" class="msg-tools">
+                <!-- 请求记录：看这句**实际发给模型的内容**（system + 历史 + 提问）。
+                     与「编辑 / 复制」同一排、放在它们左侧（用户定位）；
+                     快照按次记，点开是列表，默认选最新一次 -->
+                <button class="msg-tool" type="button" :title="$t('ai.reqLogTip')" @click="reqLogOpen = true">
+                  <el-icon><List /></el-icon>
+                </button>
                 <button class="msg-tool" type="button" :title="$t('ai.editMsg')"
                         :disabled="generating" @click="startEdit(i)">
                   <el-icon><Edit /></el-icon>
@@ -324,6 +339,7 @@
               <div class="msg-avatar"><AiMark :size="19" /></div>
               <div class="msg-main">
                 <div class="msg-bubble typing">
+                  <span class="wait-tx">{{ $t('ai.thinkingNow') }}</span>
                   <span class="dot"></span><span class="dot"></span><span class="dot"></span>
                   <span v-if="waitingSec >= 3" class="wait">{{ $t('ai.waited', { s: waitingSec }) }}</span>
                 </div>
@@ -765,6 +781,9 @@
     <!-- SQL 快捷验证：AI 给的 SQL 先看执行计划 / 试跑一次（不消耗 AI 调用） -->
     <SqlProbeDialog v-model="probeVisible" :sql="probeSql" :conn-id="ctxConnId"
                     :database="ctxEffectiveDatabase" :mode="probeMode" @insert="onProbeInsert" />
+
+    <!-- 「这次到底发给模型什么了」：左栏标题旁的记录图标唤出，只读内存快照 -->
+    <AiRequestLog v-model="reqLogOpen" />
   </div>
 </template>
 
@@ -772,10 +791,11 @@
 import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount, watch, defineAsyncComponent, toRef } from 'vue'
 import { saveBlobAs } from '../../utils/useExportTask'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ChatDotRound, DocumentCopy, Close, Cpu, Notebook, Download, Grid, Search, Star, Aim, DataAnalysis, Folder, Loading, ArrowDown, ArrowLeft, ArrowRight, Select, Coin, Connection, Promotion, Switch, Plus, Edit, Collection, Microphone, Bell, Tickets, Delete, MagicStick } from '@element-plus/icons-vue'
+import { ChatDotRound, DocumentCopy, Close, Cpu, Notebook, Download, Grid, Search, Star, Aim, DataAnalysis, Folder, Loading, ArrowDown, ArrowLeft, ArrowRight, Select, Coin, Connection, Promotion, Switch, Plus, Edit, Collection, Microphone, Bell, Tickets, List, Delete, MagicStick } from '@element-plus/icons-vue'
 import AiMark from '../../common/AiMark.vue'
 import AiChangeCard from './AiChangeCard.vue'
 import AiToolDetail from './AiToolDetail.vue'
+import AiRequestLog from './AiRequestLog.vue'
 import { aiChat, aiChatStream, aiDataDict, aiInsight, aiAskStream, aiWarmup, aiExportDoc, getAiConfig, listConnections, listDatabases, listSchemas, listTables, kbList, kbSearch,
   aiAgentStream, aiJobResumeStream, aiThreadList, aiThreadGet, aiThreadDelete, aiThreadTrim, aiThreadRename, aiMemoryList, aiMemoryAdd, aiMemoryDelete,
   aiMemoryDetach,
@@ -3073,6 +3093,8 @@ const settleTimeline = (msg, res, append = false) => {
  */
 const HIST_OPEN_KEY = 'dbmind_ai_hist_open.v2'
 const histOpen = ref(localStorage.getItem(HIST_OPEN_KEY) === '1')
+/** 「请求记录」对话框：看最近几次真正发给模型的 system + 消息（后端内存快照） */
+const reqLogOpen = ref(false)
 const toggleHist = () => {
   histOpen.value = !histOpen.value
   try { localStorage.setItem(HIST_OPEN_KEY, histOpen.value ? '1' : '0') } catch { /* 隐私模式写不了，忽略 */ }
@@ -4096,29 +4118,25 @@ watch([currentModelLabel, kbScopeLabel, () => ctxTables.value.length, () => loca
   border-radius: 8px;
   line-height: 1.65;
 }
-/* 等待气泡：高度锁成「一行消息」——上下 6px 内边距 + 一行文字（1.55 行高、14px 字号），
-   与右侧我的气泡完全等高（原来 14px padding，加上「已等待 N 秒」的文字行，
-   整块比一行消息高出一截，看着像另一条完整回答）。 */
+/* 等待气泡：**要看得见**（用户拍图「气泡看不到了」）。
+   走过两版弯路，两头都要避开：
+   - 14px padding 的空白框 → 像另一条完整回答，用户说「空框很难看」；
+   - 透明无底无框 → 只剩头像加三个点飘着，用户说「气泡看不到了」。
+   现在：沿用普通回答的卡片底 + 圆角 + 小箭头（跟上下气泡连成一条视觉线），
+   内边距收到 7px 让整块只有一行高，内容固定是「三点 + 正在思考…」——不是空框。 */
 .typing {
-  display: flex; align-items: center; gap: 4px;
-  padding: 2px 2px;
+  display: flex; align-items: center; gap: 5px;
   white-space: nowrap;
 }
-/* 等待态不再画一个「空框」：去掉底色/描边/小箭头，只留三点 + 已等待秒数，
-   否则上一段结论下面会多出一个只有「… 3s」的灰盒子（用户拍图说「空框很难看」）。 */
 .msg.assistant.is-typing .msg-bubble,
 .msg.assistant .msg-bubble.typing {
-  background: transparent; border: none; box-shadow: none;
-  padding: 2px 2px; min-height: 0;
+  padding: 7px 12px; min-height: 0; line-height: 1.5;
 }
-.msg.assistant.is-typing .msg-bubble::before,
-.msg.assistant.is-typing .msg-bubble::after,
-.msg.assistant .msg-bubble.typing::before,
-.msg.assistant .msg-bubble.typing::after { display: none; }
+.typing .wait-tx { font-size: 12.5px; color: var(--dc-text-dim); }
 .typing .dot { width: 6px; height: 6px; border-radius: 8px; background: var(--dc-text-dim); animation: dc-blink 1.2s infinite; }
 .typing .dot:nth-child(2) { animation-delay: .2s; }
 .typing .dot:nth-child(3) { animation-delay: .4s; }
-.typing .wait { margin-left: 6px; font-size: 12px; color: var(--dc-text-dim); }
+.typing .wait { margin-left: 2px; font-size: 12px; color: var(--dc-text-dim); }
 /* 流式进行中的底部提示：三个跳动小点 + 「生成中…」 */
 .streaming-hint {
   display: flex; align-items: center; gap: 4px;
@@ -4130,9 +4148,25 @@ watch([currentModelLabel, kbScopeLabel, () => ctxTables.value.length, () => loca
   background: var(--dc-primary);
   animation: dc-blink 1.2s infinite;
 }
-.streaming-hint .dot:nth-child(2) { animation-delay: .2s; }
-.streaming-hint .dot:nth-child(3) { animation-delay: .4s; }
-.streaming-hint .txt { margin-left: 4px; font-size: 12px; color: var(--dc-text-dim); }
+/* 三个点现在跟在文字后面：children 是 [.txt, .dot, .dot, .dot]，
+   所以延迟挂在第 3、4 个孩子上（第 2 个是第一个点，不延迟） */
+.streaming-hint .dot:nth-child(3) { animation-delay: .2s; }
+.streaming-hint .dot:nth-child(4) { animation-delay: .4s; }
+.streaming-hint .txt { margin-right: 1px; font-size: 12px; color: var(--dc-text-dim); }
+/* 停止：贴右侧、胶囊形、**淡红**（这是一个"中断"动作，红色比灰色更说明问题）。
+   日常是低饱和红（10% 底 + 45% 边），悬停才变实心红 + 白字 —— 不刺眼但不会找不到 */
+.sh-stop {
+  margin-left: auto;
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 22px; padding: 0 10px;
+  border: 1px solid rgba(214, 69, 69, .45); border-radius: 999px;
+  background: rgba(214, 69, 69, .10); color: #d64545;
+  font-size: 11.5px; line-height: 1; cursor: pointer;
+  transition: color .15s ease, border-color .15s ease, background .15s ease;
+}
+.sh-stop:hover { color: #fff; border-color: #d64545; background: #d64545; }
+/* 停止符号用实心方块（与输入框那个停止键同一语言），不额外引图标 */
+.sh-stop-sq { width: 6px; height: 6px; border-radius: 1.5px; background: currentColor; }
 @keyframes dc-blink { 0%, 100% { opacity: .3; } 50% { opacity: 1; } }
 
 /* ===== 指令 Skill 的操作卡片（原命令面板能力）===== */

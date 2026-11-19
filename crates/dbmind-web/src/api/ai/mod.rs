@@ -669,6 +669,7 @@ fn part_label(key: &str) -> &'static str {
 /// 顺便给一条能直接照做的建议（带表名提问 / 聚焦某张表 / 开新会话）。
 pub async fn preview(
     axum::extract::State(state): axum::extract::State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
     axum::Json(req): axum::Json<AiRequest>,
 ) -> XResult<axum::Json<Value>> {
     let base = prompts::render("common.default-system", &[])?;
@@ -760,7 +761,7 @@ pub async fn preview(
         notes.push("这次请求已经很精简：没有可丢的段落".to_string());
     }
 
-    Ok(axum::Json(json!({
+    let mut out = json!({
         "success": true,
         "total": { "chars": total_chars, "tokens": total_tokens },
         "parts": parts,
@@ -777,7 +778,43 @@ pub async fn preview(
             "masked": schema.masked,
         })),
         "notes": notes,
-    })))
+    });
+    // `?text=1`：连同「这次真正发给模型的 system 原文」一起返回。
+    // 只看百分比回答不了「2,758 token 到底发了什么」—— 得能看到那 9,000 字符的正文。
+    // 默认不带：全库清单动辄上万字符，界面不需要每次都收一遍。
+    if query
+        .get("text")
+        .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "yes"))
+    {
+        out["system"] = json!(build.text);
+        out["question"] = json!(question);
+    }
+    Ok(axum::Json(out))
+}
+
+/// 最近发出去的请求（列表，不含正文）。
+pub async fn requests() -> axum::Json<Value> {
+    axum::Json(json!({ "success": true, "items": config::sent_list() }))
+}
+
+/// 单条请求的全文：`system` + 完整 `messages`（智能体还带 `tools`）。
+pub async fn request_one(
+    axum::extract::Path(id): axum::extract::Path<i64>,
+) -> axum::Json<Value> {
+    let item = config::sent_one(id);
+    if item.is_null() {
+        return axum::Json(json!({
+            "success": false,
+            "message": "这条请求已经不在库里了（可能已被新记录挤出 200 条，或已被清空）",
+        }));
+    }
+    axum::Json(json!({ "success": true, "item": item }))
+}
+
+/// 清空快照（排查完手动收拾，免得旧内容被后来的人看到）。
+pub async fn requests_clear() -> axum::Json<Value> {
+    config::sent_clear();
+    axum::Json(json!({ "success": true }))
 }
 
 /// `GET /api/ai/config`。
@@ -858,6 +895,9 @@ pub fn routes() -> Router<AppState> {
         .route("/api/ai/prompts/reload", post(reload_prompts))
         // 只算账、不调模型：回答「这次请求的 token 都花在哪」，零成本
         .route("/api/ai/preview", post(preview))
+        // 「这次到底发给模型什么了」：memory 里的请求快照（进程重启即清空，不落盘）
+        .route("/api/ai/requests", get(requests).delete(requests_clear))
+        .route("/api/ai/requests/{id}", get(request_one))
         // 字段脱敏：规则 CRUD + 实时预览（预览也走同一份掩码实现，避免两套逻辑漂移）
         .route(
             "/api/ai/mask-rules",
