@@ -1303,18 +1303,36 @@ html .el-button.is-text.dc-del.is-disabled { color: var(--dc-text-dim); opacity:
 
 
 /* 条目内的图标 / 名称 / 勾 */
-.ai-model-dropdown .skills-ic { flex-shrink: 0; color: var(--dc-text-dim); font-size: 14px; }
-.ai-model-dropdown .el-dropdown-menu__item.active .skills-ic { color: var(--dc-primary); }
+/* 图标统一装进 20px 小方块底（技能 / 模型 / 导出格式共用）：裸图标一行里色深忽深忽浅，
+   加底色后与「勾」一起形成固定的左右节奏，扫视起来不跳 */
+.ai-model-dropdown .skills-ic {
+  flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; border-radius: 6px;
+  /* 底色由「文字色」按低比例混出：深色主题下变亮、浅色主题下变灰，
+     一块规则两种主题都看得见（用固定的 --dc-bg-soft 在深色弹层里几乎消失） */
+  background: color-mix(in srgb, var(--dc-text) 7%, transparent);
+  color: var(--dc-text-mid);
+  font-size: 12px;
+  transition: background .15s ease, color .15s ease;
+}
+.ai-model-dropdown .el-dropdown-menu__item:not(.is-disabled):hover .skills-ic {
+  background: color-mix(in srgb, var(--dc-text) 11%, transparent);
+}
+.ai-model-dropdown .el-dropdown-menu__item.active .skills-ic { background: var(--dc-primary-wash); color: var(--dc-primary); }
 /* 插件技能自带 emoji 图标：占位与 el-icon 一致，但保留 emoji 自身颜色（不跟随主色） */
 .ai-model-dropdown span.skills-ic.skill-emoji {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 14px; height: 14px; font-size: 13px; line-height: 1;
+  width: 20px; height: 20px; font-size: 12px; line-height: 1;
+  background: transparent;
 }
 .ai-model-dropdown .skills-name {
   flex: 1; min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .ai-model-dropdown .skills-check { flex-shrink: 0; color: var(--dc-primary); }
+/* 技能下拉固定一个舒展的宽度：只按内容定宽时（中文技能名 + 图标方块）只有 ~110px，
+   分组标题「内置能力 / 插件技能」和技能名挤在一起，扫视很累 */
+.ai-model-dropdown .ai-model-menu.skill-menu { width: 210px; }
 /* 数据源下拉：层级缩进 + 层级图标 + 展开箭头 + 引导竖线 */
 .ai-model-dropdown .ctx-menu { width: 280px; }
 .ai-model-dropdown .el-dropdown-menu__item.ctx-item { position: relative; }

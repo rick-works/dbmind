@@ -149,8 +149,11 @@
                 <template v-if="m.role === 'user'">
                   <div class="msg-text">
                     <span v-for="sk in (m.skills || [])" :key="sk.id || sk.name" class="msg-skill-tag">
-                      <span v-if="sk.icon || iconOfSkill(sk.name)" class="msg-skill-ic">{{ sk.icon || iconOfSkill(sk.name) }}</span>
-                      <el-icon v-else :size="11"><MagicStick /></el-icon>{{ sk.name }}
+                      <span class="msg-skill-ic">
+                        <template v-if="sk.icon || iconOfSkill(sk.name)">{{ sk.icon || iconOfSkill(sk.name) }}</template>
+                        <MagicStick v-else />
+                      </span>
+                      <span class="msg-skill-tx">{{ sk.name }}</span>
                     </span>
                     <span class="msg-body">{{ m.content }}</span>
                   </div>
@@ -317,13 +320,15 @@
                  内置能力选中时显示当前那一个（× 回到自由对话）；插件技能可多个叠加 -->
             <div v-if="activeSkill || pickedSkills.length" class="picked-skills">
               <span v-if="activeSkill" class="picked-skill" :title="activeSkill.desc">
-                <el-icon :size="11"><component :is="activeSkill.icon" /></el-icon>
+                <span class="picked-skill-ic"><component :is="activeSkill.icon" /></span>
                 <span class="picked-skill-tx">{{ activeSkill.label }}</span>
                 <el-icon class="picked-skill-x" :title="$t('ai.skillRemove')" @click="backToFreeChat"><Close /></el-icon>
               </span>
               <span v-for="s in pickedSkills" :key="s.id" class="picked-skill" :title="s.description">
-                <span v-if="s.icon || iconOfSkill(s.name)" class="picked-skill-ic">{{ s.icon || iconOfSkill(s.name) }}</span>
-                <el-icon v-else :size="11"><MagicStick /></el-icon>
+                <span class="picked-skill-ic">
+                  <template v-if="s.icon || iconOfSkill(s.name)">{{ s.icon || iconOfSkill(s.name) }}</template>
+                  <MagicStick v-else />
+                </span>
                 <span class="picked-skill-tx">{{ s.name }}</span>
                 <el-icon class="picked-skill-x" :title="$t('ai.skillRemove')" @click="unpickSkill(s.id)"><Close /></el-icon>
               </span>
@@ -363,7 +368,7 @@
                 </button>
                 <template #dropdown>
                   <div class="ai-dd-head">{{ $t('ai.pickSkill') }}</div>
-                  <el-dropdown-menu class="ai-model-menu">
+                  <el-dropdown-menu class="ai-model-menu skill-menu">
                     <el-dropdown-item disabled class="ai-dd-group">{{ $t('ai.builtinSkills') }}</el-dropdown-item>
                     <el-dropdown-item v-for="s in tabs" :key="s.key" :command="s.key"
                                       :class="{ active: tab === s.key }" :title="s.desc">
@@ -3114,14 +3119,21 @@ watch([currentModelLabel, kbScopeLabel, () => ctxTables.value.length, () => loca
    内置能力占一个，插件技能可叠加多个；点 × 摘掉（内置那个 × 就是回自由对话） */
 .picked-skills { display: flex; flex-wrap: wrap; gap: 6px; padding: 9px 12px 0; }
 .picked-skill {
-  display: inline-flex; align-items: center; gap: 4px; max-width: 100%;
-  padding: 2px 6px 2px 8px; border-radius: 999px;
+  display: inline-flex; align-items: center; gap: 5px; max-width: 100%;
+  padding: 2px 6px 2px 2px; border-radius: 999px;
   background: var(--dc-primary-wash); border: 1px solid var(--dc-primary-glow);
   color: var(--dc-primary); font-size: 11.5px; line-height: 1.7;
 }
 .picked-skill-tx { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* 插件技能自带的 emoji 图标：当字形用，别让它被行高撑开 chip */
-.picked-skill-ic { font-size: 12px; line-height: 1; }
+/* 技能图标统一装进小圆底：内置能力（el-icon）与插件 emoji 都走这一层 ——
+   裸字形在 chip 里忽大忽小、还贴边，圆底既统一尺寸也与消息气泡里的标签同款 */
+.picked-skill-ic {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: color-mix(in srgb, var(--dc-primary) 16%, transparent);
+  color: var(--dc-primary); font-size: 11px; line-height: 1;
+}
+.picked-skill-ic > svg { width: 10px; height: 10px; }
 .picked-skill-x { border-radius: 50%; cursor: pointer; transition: background .15s ease, color .15s ease; }
 .picked-skill-x:hover { background: var(--dc-primary); color: #fff; }
 
@@ -3411,17 +3423,33 @@ watch([currentModelLabel, kbScopeLabel, () => ctxTables.value.length, () => loca
 }
 
 .msg-text { white-space: pre-wrap; word-break: break-word; }
-/* 用户气泡里的技能标签：像 @提及 一样嵌在正文前面（主色底上叠一层半透明白，
-   不用实心主色 —— 那会和气泡融成一块，看不清是个标签） */
+/* 用户气泡里的技能标签：做成「小徽章」—— 不透明的药丸底 + 主色细边 + 图标圆底。
+   原来是在主色气泡上叠一层半透明白，深浅两种主题下都发灰、跟气泡糊成一块，
+   用户看不出「这是个技能标记」；改成反衬卡片底后，一眼是贴在气泡上的标签。 */
 .msg-skill-tag {
-  display: inline-flex; align-items: center; gap: 4px;
-  margin-right: 6px; padding: 1px 7px 1px 6px; border-radius: 6px;
-  background: rgba(255, 255, 255, .22); border: 1px solid rgba(255, 255, 255, .32);
-  font-size: 11.5px; line-height: 1.7; vertical-align: 1px;
-  white-space: nowrap;
+  display: inline-flex; align-items: center; gap: 5px;
+  margin-right: 7px; padding: 1px 9px 1px 2px; border-radius: 999px;
+  background: color-mix(in srgb, var(--dc-bg-card) 80%, transparent);
+  border: 1px solid color-mix(in srgb, var(--dc-primary) 40%, transparent);
+  color: var(--dc-text);
+  font-size: 11.5px; font-weight: 500; letter-spacing: .2px;
+  line-height: 1.65; vertical-align: 1px; white-space: nowrap;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .14);
+  backdrop-filter: blur(3px);
 }
-/* 插件技能自带的 emoji 图标（清单里的 icon 字段）：当字形用，不参与行高 */
-.msg-skill-ic { font-size: 12px; line-height: 1; }
+/* 不支持 color-mix 的旧内核：退回不透明卡片底 + 现成的主色描边变量 */
+@supports not (background: color-mix(in srgb, #fff, #000)) {
+  .msg-skill-tag { background: var(--dc-bg-card); border-color: var(--dc-primary-glow); }
+}
+/* 图标圆底：插件 emoji 与内置图标都收进 15px 圆里，跟 chip 的图标同一视觉 */
+.msg-skill-tag .msg-skill-ic {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 15px; height: 15px; border-radius: 50%;
+  background: color-mix(in srgb, var(--dc-primary) 16%, transparent);
+  color: var(--dc-primary); font-size: 10px; line-height: 1;
+}
+.msg-skill-tag .msg-skill-ic > svg { width: 9px; height: 9px; }
+.msg-skill-tx { line-height: 1.6; }
 .msg-body { white-space: pre-wrap; }
 /* 消息内代码块：底色比气泡深一档（--ai-inset-bg），靠底色而不是边框拉开层次，
    去掉描边后块内更干净、也不与气泡边框「线条打架」。

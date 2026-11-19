@@ -4,6 +4,8 @@
     <aside class="kbs-side">
       <div class="kbs-side-head">
         <span class="kbs-side-title">
+          <!-- 与顶栏「知识库」同一枚图标（assets/nav/knowledge.svg）：两处入口同一个模样 -->
+          <NavIcon name="knowledge" :size="15" class="kbs-side-ic" />
           {{ $t('kbx.kbTitle') }}
           <span v-if="items.length" class="kbs-side-count">{{ items.length }}</span>
         </span>
@@ -221,7 +223,7 @@
 
       <!-- 空态 -->
       <div v-else class="kbs-blank">
-        <el-icon class="kbs-blank-icon"><Reading /></el-icon>
+        <NavIcon name="knowledge" :size="40" class="kbs-blank-icon" />
         <div class="kbs-blank-title">{{ $t('ks.blankTitle') }}</div>
         <div class="kbs-blank-desc">
           {{ $t('ks.blankDescA') }}<b>{{ $t('ks.blankDescB') }}</b>{{ $t('ks.blankDescC') }}<br />
@@ -390,8 +392,9 @@
 import { ref, computed, watch, nextTick, onMounted } from 'vue'
 import { t, locale } from '../../utils/i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Search, EditPen, Delete, UploadFilled, Document, Setting, Refresh, Collection, QuestionFilled, Loading , Reading } from '@element-plus/icons-vue'
+import { Plus, Search, EditPen, Delete, UploadFilled, Document, Setting, Refresh, Collection, QuestionFilled, Loading } from '@element-plus/icons-vue'
 import AiMark from '../../common/AiMark.vue'
+import NavIcon from '../../common/NavIcon.vue'
 import KbSettingsForm from './KbSettingsForm.vue'
 
 const props = defineProps({
@@ -1337,7 +1340,9 @@ onMounted(async () => {
   height: 100%; display: flex; flex-direction: column; align-items: center;
   justify-content: center; gap: 10px; text-align: center; padding: 40px 20px;
 }
-.kbs-blank-icon { font-size: 34px; color: var(--dc-border-strong); }
+.kbs-blank-icon { color: var(--dc-border-strong); }
+/* 左栏标题的「知识库」图标：主色点缀，与顶栏那枚同源 */
+.kbs-side-ic { color: var(--dc-primary); }
 .kbs-blank-title { font-size: 14px; font-weight: 600; color: var(--dc-text-mid); }
 .kbs-blank-desc { font-size: 13px; color: var(--dc-text-dim); line-height: 1.9; max-width: 420px; }
 .kbs-blank-desc b { color: var(--dc-text-mid); }

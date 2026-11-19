@@ -25,16 +25,17 @@
              第 7 个起收进「更多」下拉；启用的不超过 6 个时不显示「更多」。 -->
         <!-- 窗口窄放不下时逐项收成纯图标（fitTopNav，从右往左），悬浮 v-fast-tip 快速显示文字 -->
         <span v-for="mi in topMenuPrimary" :key="mi.id" class="top-nav-item top-menu-item"
-              :class="{ 'top-nav-action': mi.id === 'newScript' }"
+              :class="{ 'top-nav-action': mi.id === 'newScript', 'is-current': topMenuActive === mi.id }"
               v-fast-tip="() => mi.label()"
               @click="topMenuRun(mi.id)">
           <el-icon><component :is="mi.icon" /></el-icon><span class="nav-tx">{{ mi.label() }}</span>
         </span>
         <el-dropdown v-if="topMenuOverflow.length" trigger="hover" placement="bottom" @command="topMenuRun">
-          <span class="top-nav-item top-nav-more">{{ $t('nav.more') }}<el-icon class="more-caret"><ArrowDown /></el-icon></span>
+          <span class="top-nav-item top-nav-more" :class="{ 'is-current': topMenuOverflow.some(m => m.id === topMenuActive) }">{{ $t('nav.more') }}<el-icon class="more-caret"><ArrowDown /></el-icon></span>
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item v-for="mi in topMenuOverflow" :key="mi.id" :command="mi.id">
+              <el-dropdown-item v-for="mi in topMenuOverflow" :key="mi.id" :command="mi.id"
+                                :class="{ 'is-current': topMenuActive === mi.id }">
                 <el-icon class="more-item-icon"><component :is="mi.icon" /></el-icon>{{ mi.label() }}
               </el-dropdown-item>
             </el-dropdown-menu>
@@ -43,32 +44,30 @@
         <span class="top-nav-right">
           <!-- 产品官网（www.dbmind.top）：Cloudflare Pages 托管，点击交系统浏览器打开
                （壳里 window.open/_blank 都无效，统一走 utils/externalLinks）。
-               图标只用 **Element 内置图标**（HomeFilled：实心房子、中间挖出拱形门洞）：
-               字体级字形，浏览器按 font-size 渲染，mac / Windows 同一套几何，尺寸不可能
-               有平台差异 —— 旁边那 8 个就是证明。手写 SVG 要靠 viewBox 和线宽去凑，
-               Windows 上算得再准也保证不了 Retina 上的观感（这条走过两次弯路）。 -->
+               右侧这一组图标从 2026-11-19 起统一走 NavIcon（src/assets/nav/*.svg）：
+               形状当 mask、颜色取 currentColor，深浅主题一套资源。 -->
           <el-tooltip :content="$t('nav.officialSite')" placement="bottom">
             <span class="top-nav-item top-icon-btn" @click="openExternal('https://www.dbmind.top/')">
-              <el-icon><HomeFilled /></el-icon>
+              <NavIcon name="home" />
             </span>
           </el-tooltip>
-          <!-- GitHub 仓库主页：element-plus 没有 octocat 标志，仍用官方 octicon mark，
-               但**放进 el-icon 里**——尺寸由 `.el-icon svg { width/height: 1em }` 接管，
-               与其它图标完全同源，不再需要任何按平台的尺寸补偿。 -->
+          <!-- GitHub 仓库主页：octocat 标志 -->
           <el-tooltip :content="$t('nav.githubSite')" placement="bottom">
             <span class="top-nav-item top-icon-btn" @click="openExternal('https://github.com/rick-works/dbmind')">
-              <el-icon><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg></el-icon>
+              <NavIcon name="github" />
             </span>
           </el-tooltip>
-          <el-tooltip :content="$t('nav.knowledge')" placement="bottom"><span class="top-nav-item top-icon-btn" :class="{ 'dc-top-active': knowledgeOpen }" @click="openKnowledge"><el-icon><Reading /></el-icon></span></el-tooltip>
-          <!-- AI 助手：自绘机器人（AiMark）。尺寸跟「顶栏右侧图标」设置走（--dc-nav-icon），
-               与旁边的官网小房子 / GitHub / 时钟同一档；写死像素会在用户调大图标后掉队。 -->
-          <el-tooltip :content="$t('nav.ai')" placement="bottom"><span class="top-nav-item top-icon-btn" :class="{ 'dc-top-active': aiOpen }" @click="toggleAi"><AiMark :size="'var(--dc-nav-icon, 16px)'" /></span></el-tooltip>
-          <!-- 右侧时钟图标：**正在执行**的任务 —— 鼠标悬浮直接下拉展示（纯 CSS hover，
+          <el-tooltip :content="$t('nav.knowledge')" placement="bottom"><span class="top-nav-item top-icon-btn" :class="{ 'dc-top-active': knowledgeOpen }" @click="openKnowledge"><NavIcon name="knowledge" /></span></el-tooltip>
+          <!-- AI 助手：仍是自带的自绘机器人（AiMark，内联 SVG + currentColor）。
+               用户 2026-11-19 给的那枚「智能助手」图标在 16px 下辨识度不如它，按要求换回原样。
+               尺寸跟「顶栏右侧图标」设置走（--dc-nav-icon），与旁边 9 枚同一档；
+               写死像素会在用户调大图标后掉队。 -->
+          <el-tooltip :content="$t('nav.ai')" placement="bottom"><span class="top-nav-item top-icon-btn" :class="{ 'dc-top-active': aiActive }" @click="toggleAi"><AiMark :size="'calc(var(--dc-nav-icon, 16px) * 1.03)'" /></span></el-tooltip>
+          <!-- 右侧任务图标：**正在执行**的任务 —— 鼠标悬浮直接下拉展示（纯 CSS hover，
                不用 popover/弹窗 —— 定位受顶栏布局影响会飘）。点任务项回到进度窗。 -->
           <span class="bg-hover" @mouseenter="refreshBgStatus()">
-            <span class="top-nav-item top-icon-btn bg-task-btn">
-              <el-icon><Clock /></el-icon>
+            <span class="top-nav-item top-icon-btn bg-task-btn" :class="{ 'dc-top-active': bgCenterOpen }">
+              <NavIcon name="tasks" />
               <span v-if="bgRunningCount" class="bg-count">{{ bgRunningCount }}</span>
             </span>
             <div class="bg-running-panel">
@@ -88,20 +87,21 @@
           <!-- 刷新：location.reload()。界面上偶尔有"该刷新的地方没刷新"的漏网之鱼
                （连接改了只读、设置改了……），用户不必去按 F5，右上角点一下重来。
                提示文案就是「刷新」两个字（用户要求去掉"整站"这类解释性说法）。 -->
-          <el-tooltip :content="$t('nav.reloadApp')" placement="bottom"><span class="top-nav-item top-icon-btn" @click="reloadApp"><el-icon><Refresh /></el-icon></span></el-tooltip>
+          <el-tooltip :content="$t('nav.reloadApp')" placement="bottom"><span class="top-nav-item top-icon-btn" @click="reloadApp"><NavIcon name="refresh" /></span></el-tooltip>
 
-          <el-tooltip :content="themeTip" placement="bottom"><span class="top-nav-item top-icon-btn" :class="{ 'dc-top-active': themeMode !== 'system' }" @click="cycleTheme"><el-icon><component :is="themeIcon" /></el-icon></span></el-tooltip>
-          <el-tooltip :content="langTip" placement="bottom"><span class="top-nav-item top-icon-btn top-lang-btn" @click="toggleLocale">{{ localeShort }}</span></el-tooltip>
+          <!-- 主题图标分白天/晚上两枚（用户 2026-11-19 提供）：按**当前解析出的**主题选，
+               浅色显示太阳、深色显示月亮 —— 图标本身就是「现在是什么样子」的提示。 -->
+          <el-tooltip :content="themeTip" placement="bottom"><span class="top-nav-item top-icon-btn" :class="{ 'dc-top-active': themeMode !== 'system' }" @click="cycleTheme"><NavIcon :name="themeIcon" /></span></el-tooltip>
+          <!-- 语言图标分「中 / e」两枚：跟着当前界面语言走，切换后立刻换过来 -->
+          <el-tooltip :content="langTip" placement="bottom"><span class="top-nav-item top-icon-btn" @click="toggleLocale"><NavIcon :name="langIcon" /></span></el-tooltip>
 
           <!-- 检查更新：比对 GitHub 最新 Release，有新版可在线下载安装。
-               图标用 Download（往下取新版）；Refresh 让给左侧的「刷新」了。
-               **不能用 Upload**（向上箭头）—— 用户会看成「上传文件」（真机反馈），
-               检查中 / 下载中换成 Loading 并转起来，点下去要有反应。 -->
+               检查中 / 下载中原地转起来（NavIcon 的 .nav-ic-spin），点下去要有反应。 -->
           <el-tooltip :content="dlStatus === 'running' ? $t('update.dlShowProgress') : $t('nav.update')" placement="bottom"><span class="top-nav-item top-icon-btn"
                      data-act="check-update"
-                     :class="{ 'top-updating': updateChecking || dlStatus === 'running' }" @click="checkUpdate"><el-icon :class="{ 'is-loading': updateChecking || dlStatus === 'running' }"><component :is="(updateChecking || dlStatus === 'running') ? Loading : Download" /></el-icon></span></el-tooltip>
+                     :class="{ 'top-updating': updateChecking || dlStatus === 'running' }" @click="checkUpdate"><NavIcon name="update" :class="{ 'nav-ic-spin': updateChecking || dlStatus === 'running' }" /></span></el-tooltip>
 
-          <el-tooltip :content="$t('nav.settings')" placement="bottom"><span class="top-nav-item top-icon-btn" @click="settingsOpen = true"><el-icon><Setting /></el-icon></span></el-tooltip>
+          <el-tooltip :content="$t('nav.settings')" placement="bottom"><span class="top-nav-item top-icon-btn" :class="{ 'dc-top-active': settingsOpen }" @click="settingsOpen = true"><NavIcon name="settings" /></span></el-tooltip>
         </span>
       </nav>
 
@@ -139,7 +139,7 @@
             <el-input v-model="filterText" clearable :prefix-icon="Search" class="tree-search" />
             <el-tooltip :content="$t('tree.newFolder')" placement="bottom"><button class="tree-tool" @click="treeCtxNewFolder('')"><el-icon><FolderAdd /></el-icon></button></el-tooltip>
             <el-tooltip :content="$t('tree.newConnection')" placement="bottom"><button class="tree-tool" @click="openNewConn('')"><el-icon><Plus /></el-icon></button></el-tooltip>
-            <el-tooltip :content="$t('tree.refresh')" placement="bottom"><button class="tree-tool" @click="refreshTree"><el-icon><Refresh /></el-icon></button></el-tooltip>
+            <el-tooltip :content="$t('tree.refresh')" placement="bottom"><button class="tree-tool" @click="refreshTree"><NavIcon name="refresh" size="1em" /></button></el-tooltip>
           <el-tooltip :content="$t('tree.collapseTree')" placement="bottom"><button class="tree-tool" @click="sidebarHidden = true"><el-icon><Fold /></el-icon></button></el-tooltip>
           </div>
           <!-- 多选浮条：Ctrl / ⌘ 点选节点后出现，汇总这一批能做的动作。
@@ -680,7 +680,7 @@
         <li v-if="featureOf(ctxMenu.data?.connId, 'supportsDDLExec')" class="danger" @click="ctxTruncateTable"><el-icon><Delete /></el-icon><span>{{ $t('menu.truncateTable') }}</span></li>
         <li v-if="featureOf(ctxMenu.data?.connId, 'supportsDDLExec')" class="danger" @click="ctxDropTable"><el-icon><Delete /></el-icon><span>{{ $t('menu.dropTable') }}</span></li>
         <li class="divider" />
-        <li @click="ctxRefreshRows"><el-icon><Refresh /></el-icon><span>{{ $t('common.refresh') }}</span></li>
+        <li @click="ctxRefreshRows"><NavIcon name="refresh" size="1em" /><span>{{ $t('common.refresh') }}</span></li>
       </template>
       <!-- ===== 视图 ===== -->
       <template v-else-if="ctxMenu.data?.objectKind === 'view'">
@@ -692,7 +692,7 @@
         <li @click="ctxAiExplainView" class="ai-item"><AiMark /><span>{{ $t('menu.explainView') }}</span></li>
         <li class="divider" />
         <li v-if="featureOf(ctxMenu.data?.connId, 'supportsDDLExec')" class="danger" @click="objDrop"><el-icon><Delete /></el-icon><span>{{ $t('common.delete') }}</span></li>
-        <li @click="objRefresh"><el-icon><Refresh /></el-icon><span>{{ $t('common.refresh') }}</span></li>
+        <li @click="objRefresh"><NavIcon name="refresh" size="1em" /><span>{{ $t('common.refresh') }}</span></li>
       </template>
       <!-- ===== 用户 ===== -->
       <template v-else-if="ctxMenu.data?.objectKind === 'user'">
@@ -702,7 +702,7 @@
         <li class="divider" />
         <li @click="ctxCopyName"><el-icon><CopyDocument /></el-icon><span>{{ $t('common.copy') }}</span></li>
         <li class="divider" />
-        <li @click="objRefresh"><el-icon><Refresh /></el-icon><span>{{ $t('common.refresh') }}</span></li>
+        <li @click="objRefresh"><NavIcon name="refresh" size="1em" /><span>{{ $t('common.refresh') }}</span></li>
       </template>
       <!-- ===== NoSQL collection / key / index ===== -->
       <template v-else-if="ctxMenu.data?.objectKind === 'collection'">
@@ -712,7 +712,7 @@
         <li class="divider" />
         <li class="danger" @click="ctxDropCollection"><el-icon><Delete /></el-icon><span>{{ $t('common.delete') }}</span></li>
         <li class="divider" />
-        <li @click="ctxRefreshCollection"><el-icon><Refresh /></el-icon><span>{{ $t('common.refresh') }}</span></li>
+        <li @click="ctxRefreshCollection"><NavIcon name="refresh" size="1em" /><span>{{ $t('common.refresh') }}</span></li>
       </template>
       <!-- ===== 存储过程 / 函数 / 触发器 / 事件 ===== -->
       <template v-else-if="['procedure', 'function', 'trigger', 'event'].includes(ctxMenu.data?.objectKind)">
@@ -723,7 +723,7 @@
         <li v-if="objectDdlAllowed(ctxMenu.data?.connId, ctxMenu.data?.objectKind)" @click="ctxRenameObject"><el-icon><Edit /></el-icon><span>{{ $t('common.rename') }}</span></li>
         <li class="divider" />
         <li v-if="featureOf(ctxMenu.data?.connId, 'supportsDDLExec')" class="danger" @click="objDrop"><el-icon><Delete /></el-icon><span>{{ $t('common.delete') }}</span></li>
-        <li @click="objRefresh"><el-icon><Refresh /></el-icon><span>{{ $t('common.refresh') }}</span></li>
+        <li @click="objRefresh"><NavIcon name="refresh" size="1em" /><span>{{ $t('common.refresh') }}</span></li>
       </template>
       <!-- ===== 索引 ===== -->
       <!--
@@ -737,7 +737,7 @@
         <li @click="objViewDetail"><el-icon><Document /></el-icon><span>{{ $t('common.view') }}</span></li>
         <li @click="objEditDdl"><el-icon><EditPen /></el-icon><span>{{ $t('common.edit') }}</span></li>
         <li class="danger" @click="objDrop"><el-icon><Delete /></el-icon><span>{{ $t('common.delete') }}</span></li>
-        <li @click="objRefresh"><el-icon><Refresh /></el-icon><span>{{ $t('common.refresh') }}</span></li>
+        <li @click="objRefresh"><NavIcon name="refresh" size="1em" /><span>{{ $t('common.refresh') }}</span></li>
       </template>
     </ul>
 
@@ -918,7 +918,7 @@
           <el-icon><Delete /></el-icon>{{ $t('tree.menu.deleteConn') }}
         </li>
         <li class="ctx-item" @click="treeCtxRefreshConn(treeCtxMenu.data.connId)">
-          <el-icon><Refresh /></el-icon>{{ $t('common.refresh') }}
+          <NavIcon name="refresh" size="1em" />{{ $t('common.refresh') }}
         </li>
       </template>
       <!-- 空白处 -->
@@ -1003,7 +1003,7 @@
           <li class="divider" />
         </template>
         <li class="ctx-item" @click="dbCtxRefresh()">
-          <el-icon><Refresh /></el-icon>{{ $t('common.refresh') }}
+          <NavIcon name="refresh" size="1em" />{{ $t('common.refresh') }}
         </li>
       </template>
       <!-- catalog 节点（Doris）：只留 catalog 真正能做的事。
@@ -1016,7 +1016,7 @@
         </li>
         <li class="divider" />
         <li class="ctx-item" @click="catalogCtxRefresh()">
-          <el-icon><Refresh /></el-icon>{{ $t('common.refresh') }}
+          <NavIcon name="refresh" size="1em" />{{ $t('common.refresh') }}
         </li>
         <!-- 内置 catalog（internal）装着用户真正的库与表，Doris 不允许删 —— 门控掉；
              外部 catalog（如 jdbc 映射的 mysql_216）删的只是「映射」，外部数据不受影响 -->
@@ -1039,7 +1039,7 @@
         <!-- 用户「新建」入口已随「用户管理只读」一并下掉 -->
         <li class="divider" />
         <li class="ctx-item" @click="catRefresh(treeCtxMenu.db)">
-          <el-icon><Refresh /></el-icon>{{ $t('common.refresh') }}
+          <NavIcon name="refresh" size="1em" />{{ $t('common.refresh') }}
         </li>
       </template>
       <!-- 脚本节点：查看（直接跳到 SQL 编辑器页签）/ 重命名 / 删除 -->
@@ -1358,9 +1358,11 @@ onBeforeUnmount(() => {
 })
 // 菜单配置 / 语言切换会改条目数量与文字宽度，重新量一次
 watch([topMenuPrimary, () => locale.value], () => nextTick(fitTopNav))
-import { Sunny, Moon, Clock, Reading, HomeFilled, Delete as ElDelete } from '@element-plus/icons-vue'
+import { Reading, Delete as ElDelete } from '@element-plus/icons-vue'
 import AiMark from '../../common/AiMark.vue'
-import { getThemeSettings, saveThemeSettings, applyTheme, getResolvedTheme, onResolvedThemeChange } from '../../utils/theme'
+// 顶栏右侧那组图标的统一出口（SVG + currentColor，深浅主题同一套资源）
+import NavIcon from '../../common/NavIcon.vue'
+import { getThemeSettings, saveThemeSettings, applyTheme, resolveTheme, getResolvedTheme, onResolvedThemeChange } from '../../utils/theme'
 import { locale, setLocale } from '../../utils/i18n'
 import fastTip from '../../utils/fastTip'
 // 模板里的 v-fast-tip（顶栏菜单收成图标后的快速悬浮提示，120ms）
@@ -2747,10 +2749,16 @@ onBeforeUnmount(stopBgDetailPoll)
 // ===== 顶栏右侧：主题 / 语言 快速切换（原来只有知识库 / AI / 设置三枚）=====
 /** 主题模式：system / light / dark，点一次按这个顺序循环 */
 const themeMode = ref(getThemeSettings().mode)
-/** 当前「实际生效」的外观（system 模式下由系统决定），用来选图标 */
-const resolvedTheme = ref(getResolvedTheme())
-onResolvedThemeChange((v) => { resolvedTheme.value = v })
-const themeIcon = computed(() => (resolvedTheme.value === 'dark' ? Moon : Sunny))
+/**
+ * 解析后的**实际外观**（light / dark）：system 档跟随系统，所以不能只看 themeMode。
+ * theme.js 在 applyTheme 里广播变化，这里跟着换图标（浅色→太阳，深色→月亮）。
+ */
+const resolvedTheme = ref(resolveTheme(themeMode.value))
+const offResolvedTheme = onResolvedThemeChange((v) => { resolvedTheme.value = v })
+onBeforeUnmount(offResolvedTheme)
+const themeIcon = computed(() => (resolvedTheme.value === 'dark' ? 'theme-night' : 'theme-day'))
+const langIcon = computed(() => (locale.value === 'en-US' ? 'lang-en' : 'lang-zh'))
+
 const themeTip = computed(() => t(themeMode.value === 'dark' ? 'nav.themeDark' : themeMode.value === 'light' ? 'nav.themeLight' : 'nav.themeSystem'))
 const cycleTheme = () => {
   const order = ['system', 'light', 'dark']
@@ -2758,8 +2766,6 @@ const cycleTheme = () => {
   themeMode.value = saveThemeSettings({ mode: next }).mode
   applyTheme(themeMode.value)
 }
-/** 语言钮用「中 / EN」而不是图标：这两个字比任何语言图标都直白 */
-const localeShort = computed(() => (locale.value === 'en-US' ? 'EN' : '中'))
 const langTip = computed(() => t('nav.switchLang'))
 const toggleLocale = () => setLocale(locale.value === 'en-US' ? 'zh-CN' : 'en-US')
 const governanceOpen = ref(false)
@@ -2771,6 +2777,26 @@ const governanceAutoRun = ref(false)
 const GOVERNANCE_TABS = ['sensitive', 'capacity', 'quality', 'analysis', 'patrol']
 /** 「点开即出结果」的页签：从 AI 助手跳过去时自动执行 */
 const GOVERNANCE_AUTORUN_TABS = ['sensitive', 'capacity']
+
+// ===== 顶栏入口高亮：停在哪一页，哪一项就点亮 =====
+// 口径与右上角「知识库图标跟随页签」一致：页签型功能看 activeTab.type，面板型看弹窗开关。
+// 只改颜色与底纹、**不改字重** —— 顶栏放不放得下由 fitTopNav 按实测宽度收口，字重一变宽度就跳。
+const activeTabType = computed(() => tabs.value.find(x => x.id === activeTab.value)?.type || '')
+/** AI 有两种形态：右侧窄面板 / 中央工作区页签，两种开着都算「在 AI 里」 */
+const aiActive = computed(() => aiOpen.value || activeTabType.value === 'ai')
+const topMenuActive = computed(() => {
+  if (scriptsOpen.value) return 'scripts'
+  if (syncDialogOpen.value) return 'sync'
+  if (compareDialogOpen.value) return 'compare'
+  if (bgCenterOpen.value) return 'bgCenter'
+  if (governanceOpen.value) return 'governance'
+  if (pluginsOpen.value) return 'plugins'
+  // 驱动管理是设置弹窗里的一个页签：只有停在那一页时才算「在驱动管理」
+  if (settingsOpen.value) return settingsTab.value === 'driver' ? 'drivers' : ''
+  if (activeTabType.value === 'users') return 'users'
+  if (activeTabType.value === 'monitor') return 'monitor'
+  return ''
+})
 const paletteOpen = ref(false)
 /** 顶部导航「监控」入口：打开为工作区 tab（连接/库在打开时固化，后续切连接不影响本页数据源） */
 const MONITOR_TAB_PREFIX = 'monitor@'
@@ -9386,10 +9412,9 @@ const connTypeSummary = computed(() =>
 .win-act svg { width: var(--dc-nav-icon, 16px); height: var(--dc-nav-icon, 16px); fill: none; stroke: currentColor; stroke-width: 1.4; }
 .win-act:hover { background: var(--dc-bg-hover); color: var(--dc-text); }
 .win-act.is-close:hover { background: #e81123; color: #fff; }
-/* 顶栏右侧那两个图标现在都走 el-icon（官网=HomeFilled 实心字形、GitHub=el-icon 包一个
-   octicon），尺寸由 index.css 的 `.top-icon-btn.top-icon-btn .el-icon { font-size: --dc-nav-icon }`
-   统一决定 —— 以前它们各自是裸 SVG、要单独写 width/height 并额外按平台补偿，
-   现在不需要了，别在这里再加尺寸规则。 */
+/* 顶栏右侧 10 个图标统一走 NavIcon（common/NavIcon.vue）：SVG 当 mask、颜色取
+   currentColor，尺寸由组件里的 `--dc-nav-icon` 决定（与「设置 → 界面尺寸 → 顶栏右侧图标」
+   同一个变量）。别在这里再加 width/height —— 两处尺寸规则迟早打架。 */
 .top-nav { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .top-nav-item {
   display: inline-flex; align-items: center; gap: 5px;
@@ -9409,6 +9434,14 @@ const connTypeSummary = computed(() =>
 }
 .top-nav-item:hover { background: var(--dc-primary-wash); color: var(--dc-text-strong); }
 .top-nav-item.dc-top-active { color: var(--dc-primary); font-weight: 600; }
+/* 当前停留的功能入口（脚本管理 / 数据传输 / 用户管理……）：颜色 + 底纹点亮。
+   **不加 font-weight** —— 顶栏放不放得下由 fitTopNav 按实测宽度收口，字重一变宽度就跳，
+   会连带把「更多」菜单的折叠位置也抖一下。 */
+.top-nav-item.top-menu-item.is-current,
+.top-nav-item.top-nav-more.is-current {
+  color: var(--dc-primary);
+  background: var(--dc-primary-wash);
+}
 /* 收成图标的菜单项（fitTopNav，窗口窄时从右往左逐项收）：文字藏掉、对称 padding 让图标居中，
    文字提示走 v-fast-tip（120ms）。 */
 .top-nav-item.icon-only { padding: 6px 9px; }
@@ -10087,6 +10120,11 @@ const connTypeSummary = computed(() =>
 .ctx-menu li:hover { background: var(--dc-primary-wash); color: var(--dc-text-strong); }
 .ctx-menu li .el-icon { font-size: 14px; color: var(--dc-text-dim); flex-shrink: 0; }
 .ctx-menu li:hover .el-icon { color: var(--dc-text-strong); }
+/* 「刷新」条目走顶栏那枚双箭头 SVG（NavIcon）：颜色/悬停态与 el-icon 对齐 */
+.ctx-menu li .nav-ic { color: var(--dc-text-dim); }
+.ctx-menu li:hover .nav-ic { color: var(--dc-text-strong); }
+.ctx-menu li.danger .nav-ic,
+.ctx-menu li.danger:hover .nav-ic { color: var(--dc-danger); }
 .ctx-menu li .arrow { margin-left: auto; }
 .ctx-menu li.divider { height: 1px; padding: 0; margin: 4px 6px; background: var(--dc-border); cursor: default; }
 .ctx-menu li.divider:hover { background: var(--dc-border); }
@@ -10244,6 +10282,12 @@ const connTypeSummary = computed(() =>
 </style>
 
 <style>
+/* 「更多」下拉里当前停留的那一项：图标与文字点亮。
+   dropdown 是 teleport 到 body 的（不带本组件作用域属性），只能写在全局块里。 */
+.el-dropdown-menu__item.is-current { color: var(--dc-primary); }
+.el-dropdown-menu__item.is-current .el-icon,
+.el-dropdown-menu__item.is-current .nav-ic { color: var(--dc-primary); }
+
 /* 在线更新流程里的消息框，两个共用（customClass: upd-box）：
    更新前的确认框，以及更新成功后的提示框。
    **必须放在全局块**：消息框是 Element 用 JS 创建再 teleport 到 body 的 —— 它不带本组件的
@@ -10342,7 +10386,13 @@ const connTypeSummary = computed(() =>
 .bg-hover { position: relative; display: inline-flex; }
 .bg-running-panel {
   display: none;
-  position: absolute; top: calc(100% + 8px); right: 0;
+  position: absolute; top: calc(100% + 8px);
+  /* 以图标为轴左右居中：原来 right:0（面板右缘对齐按钮右缘）整块向左铺，
+     看着像挂在「剩余 5 个图标」下面而不是这一枚下面。
+     右移后右缘距窗口边约 33px（= 右侧那 5 枚图标宽 + 内边距 − 半边面板），
+     不会伸出窗口；保持贴着图标下方这一点很关键 —— 鼠标从图标移进面板的路不能断，
+     换 fixed 贴右边的话中途会经过别的按钮，hover 一丢面板就没了，任务项点不中。 */
+  left: 50%; transform: translateX(-50%);
   width: 380px; z-index: 3000;
   background: var(--dc-bg, #fff);
   border: 1px solid var(--dc-border); border-radius: 10px;

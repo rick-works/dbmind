@@ -1,5 +1,10 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v2.1.1": [
+    "Top-bar icons are a new set: the theme icon shows a sun in light mode and a moon in dark, the language icon follows the UI language (中 / En), and every icon is optically re-aligned so none looks bigger than its neighbours",
+    "Top-bar entries now light up with the page you are on - knowledge base, AI assistant, users, data transfer, task centre and more, so it is clear at a glance where you are",
+    "Skill badges in AI replies and the skill dropdown were reworked (pill background plus a round icon base, readable in both themes); the running-tasks hover panel is now centred under its icon"
+  ],
   "v2.1.0": [
     "Data source types grow from 17 to 26: TiDB, StarRocks, OceanBase, openGauss, Databend, RisingWave, DuckDB, GreatSQL, HighGo and Vastbase are new, and each one was verified on a real instance for browsing / SQL / data / sync. Four more types are wired up but not yet verified against real servers, so they stay hidden by default instead of letting you hit rough edges after connecting",
     "New plugin center (Settings - Plugins): install 'skill' plugins - a prompt plus a declaration of input fields, with no executable files involved. One-click install from the catalog, install from a file, enable / disable / uninstall and upgrade, then fill in the declared inputs and run",

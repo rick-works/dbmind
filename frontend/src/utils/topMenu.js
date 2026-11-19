@@ -2,10 +2,15 @@
 // 真身存 dbmind.db（ui.topmenu，经 settings.persistUI），localStorage 是同步缓存；
 // 启动水合完成后 settings 会广播 dbmind-ui-hydrated，这里重读一次。
 // 消费方：MainView（渲染顶栏）、SettingsView 通用页签（配置界面）。
-import { ref, computed } from 'vue'
-import { Switch, Promotion, DataAnalysis, Box, Monitor, Clock, Plus, User, Tickets, MagicStick } from '@element-plus/icons-vue'
+import { ref, computed, h } from 'vue'
+import { Switch, Promotion, DataAnalysis, Box, Monitor, Plus, User, Tickets, MagicStick } from '@element-plus/icons-vue'
+import NavIcon from '../common/NavIcon.vue'
 import { persistUI } from './settings'
 import { t } from './i18n'
+
+// 「任务中心」用顶栏右侧同一枚任务图标（src/assets/nav/tasks.svg），
+// 免得同一功能在两处长得不一样；size 取 1em 跟随菜单项字号。
+const navIcon = (name) => () => h(NavIcon, { name, size: '1em' })
 
 export const TOP_MENU_ITEMS = [
   // 默认顺序（产品定版）：前 6 个直显在顶栏，其余进「更多」下拉（见 MainView TOP_MENU_MAX）。
@@ -19,7 +24,7 @@ export const TOP_MENU_ITEMS = [
   { id: 'compare', icon: Switch, label: () => t('nav.compare') },
   // 驱动管理：直达「设置 → 驱动管理」页（看每种数据源的驱动装没装 / 缺哪些 / 换镜像源 / 手动上传）
   { id: 'drivers', icon: Box, label: () => t('nav.drivers') },
-  { id: 'bgCenter', icon: Clock, label: () => t('sync.bgCenter') },
+  { id: 'bgCenter', icon: navIcon('tasks'), label: () => t('sync.bgCenter') },
   { id: 'monitor', icon: Monitor, label: () => t('nav.monitor') },
   { id: 'governance', icon: DataAnalysis, label: () => t('nav.governance') },
   // 插件中心：装 / 卸 / 启停 / 升级插件包。默认排在最后 → 落在「更多」下拉里
