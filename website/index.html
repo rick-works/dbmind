@@ -1106,7 +1106,7 @@
       <div class="shots-viewport">
         <div class="shots-track" id="shotsTrack">
           <figure class="shot shot-video" id="shotVideo">
-            <img src="images/promo-poster.jpg" alt="DBmind 产品宣传片：17 种数据库引擎，一个客户端">
+            <img src="images/promo-poster.jpg" alt="DBmind 产品宣传片：26 种数据库引擎，一个客户端">
             <button class="shot-play" type="button" aria-label="播放 DBmind 产品宣传片，2 分 03 秒">
               <span class="shot-play-ic" aria-hidden="true"></span>
               <span class="shot-play-tx">产品宣传片<em>2 分 03 秒</em></span>
@@ -1158,7 +1158,7 @@
   }
   function go (i) { cur = (i + n) % n; track.style.transform = 'translateX(-' + cur * 100 + '%)'; [].forEach.call(dots.children, function (d, k) { d.classList.toggle('on', k === cur); }); }
   function next () { go(cur + 1); }
-  // 每屏停留时长按内容给：宣传片封面要看清「17 种引擎」与播放按钮，给足 10 秒；
+  // 每屏停留时长按内容给：宣传片封面要看清「26 种引擎」与播放按钮，给足 10 秒；
   // 其余截图维持 3.8 秒的轻快节奏。用 setTimeout 链替代固定 interval，才能逐屏不同。
   var DWELL_VIDEO = 10000, DWELL_SHOT = 3800;
   function dwellOf (i) {
