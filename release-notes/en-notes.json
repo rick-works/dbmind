@@ -1,5 +1,10 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v2.2.0": [
+    "The deep-thinking layout was redone: one rounded card per step, a tool call shows only its name and duration (click to see arguments and results), list-shaped results render as real tables, and the left rails are gone - risk / note / conclusion / next-step lines are four colour-coded callout cards",
+    "AI replies can now be edited and copied: editing a question re-answers from that turn and drops the replaced answer, and every answer ends with the input / output tokens it consumed",
+    "AI prompts were slimmed down: the agent's fixed per-round overhead is 28% smaller and ask-data 31% smaller, so the same question is faster and cheaper; ask-data history is also mirrored into the local database, so it survives a restart (the window port changes on every launch)"
+  ],
   "v2.1.1": [
     "Top-bar icons are a new set: the theme icon shows a sun in light mode and a moon in dark, the language icon follows the UI language (中 / En), and every icon is optically re-aligned so none looks bigger than its neighbours",
     "Top-bar entries now light up with the page you are on - knowledge base, AI assistant, users, data transfer, task centre and more, so it is clear at a glance where you are",
