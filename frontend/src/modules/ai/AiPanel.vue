@@ -144,10 +144,23 @@
                 <AiMark v-if="m.role !== 'user'" :size="19" />
                 <template v-else>{{ $t('ai.me') }}</template>
               </div>
-              <div class="msg-bubble" :class="{ typing: m.role !== 'user' && !m.content && m.streaming }">
+              <!-- 气泡 + 下方操作条：按钮放在**气泡外面**，悬停时才出现，
+                   不撑高气泡、也不挤在气泡里（用户要求「在框下面显示按钮」） -->
+              <div class="msg-main">
+              <div class="msg-bubble" :class="{ typing: m.role !== 'user' && !hasBody(m) && m.streaming }">
                 <!-- 用户气泡：**技能标签跟着消息走** —— 这条是按哪个技能问的，一眼看见 -->
                 <template v-if="m.role === 'user'">
-                  <div class="msg-text">
+                  <!-- 编辑态：改完直接重发，这条之后的问答全部作废重来 -->
+                  <div v-if="editingIndex === i" class="msg-edit">
+                    <el-input v-model="editingText" type="textarea" :rows="5" resize="none"
+                              class="msg-edit-input" @keydown.enter.exact.prevent="submitEdit" />
+                    <div class="msg-edit-acts">
+                      <el-button size="small" text @click="cancelEdit">{{ $t('common.cancel') }}</el-button>
+                      <el-button size="small" type="primary" :disabled="!editingText.trim() || generating"
+                                 @click="submitEdit">{{ $t('ai.resend') }}</el-button>
+                    </div>
+                  </div>
+                  <div v-else class="msg-text">
                     <span v-for="sk in (m.skills || [])" :key="sk.id || sk.name" class="msg-skill-tag">
                       <span class="msg-skill-ic">
                         <template v-if="sk.icon || iconOfSkill(sk.name)">{{ sk.icon || iconOfSkill(sk.name) }}</template>
@@ -159,13 +172,59 @@
                   </div>
                 </template>
                 <!-- 流式回复尚未产出内容：显示动态三点，而不是一个空气泡 -->
-                <template v-else-if="!m.content && m.streaming">
+                <template v-else-if="!hasBody(m) && m.streaming">
                   <span class="dot"></span><span class="dot"></span><span class="dot"></span>
                   <span v-if="waitingSec >= 3" class="wait">{{ $t('ai.waited', { s: waitingSec }) }}</span>
                 </template>
                 <!-- 智能问数：一条回答 = 结论 + 图表 + 明细（与对话同一条消息流，不开新页签） -->
                 <div v-else-if="m.askAnswer" class="msg-ask">
                   <AskAnswer :answer="m.askAnswer" @ask="runAskInChat" @insert-sql="emit('insert-sql', $event)" />
+                </div>
+                <!-- 深度思考：一条**只往下长**的时间线。
+                     文字永远在它出现的位置往后写；这一轮如果去调工具，同一块原地变灰（思考），
+                     工具行接在下面 —— 不回填、不挪位（用户反馈「怎么跑上面输出去了」）。 -->
+                <div v-else-if="m.timeline && m.timeline.length" class="ai-timeline"
+                     @click="onMdSqlAction($event, m.content)">
+                  <!-- 每一步一个圆角块：本步的叙述 + 本步的工具都装在同一个块里，
+                       块与块之间留空 —— 不然①和②会连成一片（用户：「是不是跑一起去了」） -->
+                  <div v-for="(g, gi) in stepGroups(m)" :key="gi" class="tl-step"
+                       :class="{ 'is-solo': g.solo }">
+                    <template v-for="{ p, pi } in g.parts" :key="pi">
+                      <div v-if="p.kind === 'text'" class="tl-text ai-markdown"
+                           v-html="renderMd(p.text, !m.streaming)"></div>
+                      <!-- 思考块也走 markdown：这一轮去调工具时，前面的步骤叙述会原地变灰，
+                           里面照样有表格 / 代码块 / 提示卡 —— 按纯文本渲染就会露出 `|` 和 ``` 原文 -->
+                      <div v-else-if="p.kind === 'think'" class="tl-think ai-markdown"
+                           v-html="renderMd(p.text, false)"></div>
+                      <!-- 工具调用：只留「工具名 + 耗时」，点箭头才展开参数与结果。
+                           摘要（表名 / SQL 片段）放在展开体里 —— 挤在标题行上又长又乱。 -->
+                      <div v-else-if="p.kind === 'tool'" class="tl-tool-wrap"
+                           :class="{ 'is-open': p.open, 'is-run': p.running, 'is-bad': p.ok === false }">
+                        <button type="button" class="tl-tool" @click="p.open = !p.open">
+                          <el-icon class="tl-tool-caret">
+                            <ArrowDown v-if="p.open" />
+                            <ArrowRight v-else />
+                          </el-icon>
+                          <el-icon class="tl-tool-ic" :class="{ 'is-spin': p.running }">
+                            <Loading v-if="p.running" />
+                            <Cpu v-else />
+                          </el-icon>
+                          <span class="tl-tool-name">{{ toolLabel(p.tool) }}</span>
+                          <span v-if="p.durationMs" class="tl-tool-ms">{{ p.durationMs }}ms</span>
+                        </button>
+                        <AiToolDetail v-if="p.open" :step="p" class="tl-tool-detail" />
+                      </div>
+                      <!-- 变更单：**落在它出现的位置**，不固定堆在气泡底部 ——
+                           否则审批后续跑，新吐的文字会跑到上一轮卡片上面（看着像顺序错乱）。 -->
+                      <AiChangeCard v-else-if="p.kind === 'change'" :card="p.change"
+                                    :conn-name="connNameOf(p.change)" :busy="changeBusy === p.change.id"
+                                    @allow="runChange(p.change, 'allow')" @reject="runChange(p.change, 'reject')"
+                                    @skip="skipChange(p.change)" @undo="runChange(p.change, 'undo')"
+                                    @unskip="p.change.skipped = false" />
+                      <!-- 审批后接着做的分隔线：只留一条细线，不要文字 -->
+                      <div v-else-if="p.kind === 'divider'" class="tl-sep"></div>
+                    </template>
+                  </div>
                 </div>
                 <!-- SQL 代码块的操作按钮由 markdown 渲染器生成（每段一个），这里做点击委托 -->
                 <div v-else class="ai-markdown" v-html="renderMd(m.content, !m.streaming)"
@@ -197,56 +256,29 @@
                   </el-dropdown>
                 </div>
                 <!-- 流式输出中：明确提示「还在生成」，避免用户误以为已经答完；可随时停下 -->
-                <div v-if="m.role !== 'user' && m.streaming && m.content" class="streaming-hint">
+                <div v-if="m.role !== 'user' && m.streaming && hasBody(m)" class="streaming-hint">
                   <span class="dot"></span><span class="dot"></span><span class="dot"></span>
                   <span class="txt">{{ $t('ai.generating') }}</span>
                   <el-button size="small" text type="primary" class="stop-gen" @click="stopStream">{{ $t('ai.stopGen') }}</el-button>
                 </div>
                 <!-- 服务端提示（预算降级等）：挂在回答下面，不混进正文 -->
                 <div v-if="m.notice" class="msg-notice">{{ m.notice }}</div>
-                <!-- 智能分析会真的执行只读查询：把工具调用轨迹显式列出来，
-                     让「它查了库」这件事一眼可见，而不是黑盒给个结论 -->
-                <div v-if="m.steps && m.steps.length" class="msg-steps">
-                  <div class="msg-steps-head">
-                    <el-icon><Cpu /></el-icon>{{ $t('ai.traceSteps', { n: m.steps.length }) }}
-                  </div>
-                  <div v-for="(s, si) in m.steps" :key="si" class="msg-step">
-                    <el-icon><Cpu /></el-icon>
-                    <span class="step-tool">{{ toolLabel(s.tool) }}</span>
-                    <span class="step-args">{{ s.args }}</span>
-                  </div>
-                </div>
                 <!-- 变更单：AI 对数据库的任何增删改都出一张单，**就在这段对话里**给三个动作：
                      允许（一步执行）/ 拒绝（这张不要）/ 跳过（这次不执行，留着以后在「记录」里再定）。
-                     风险、SQL、撤销语句一次摆在卡片上 —— 看不清就不该点。 -->
-                <div v-if="m.changes && m.changes.length" class="msg-changes">
-                  <div v-for="c in m.changes" :key="c.id" class="chg-card"
-                       :class="['is-' + c.risk, { 'is-skipped': c.skipped }]">
-                    <div class="chg-head">
-                      <span class="chg-risk">{{ riskLabel(c.risk) }}</span>
-                      <span class="chg-title" :title="c.title">{{ c.title }}</span>
-                      <span class="chg-state">{{ c.skipped ? $t('ai.skipped') : chgStatusLabel(c.status) }}</span>
-                    </div>
-                    <div class="chg-path" :title="changePathOf(c, connNameOf(c))">{{ changePathOf(c, connNameOf(c)) }}</div>
-                    <pre class="chg-sql">{{ c.sql }}</pre>
-                    <div v-if="c.undoSql" class="chg-undo">↩ {{ c.undoSql }}</div>
-                    <div v-if="!c.skipped" class="chg-acts">
-                      <el-button v-if="c.status === 'pending'" size="small" type="primary"
-                                 :loading="changeBusy === c.id" @click="runChange(c, 'allow')">
-                        {{ $t('ai.allow') }}
-                      </el-button>
-                      <el-button v-if="c.status === 'pending'" size="small" text @click="runChange(c, 'reject')">
-                        {{ $t('ai.chgReject') }}
-                      </el-button>
-                      <el-button v-if="c.status === 'pending'" size="small" text @click="skipChange(c)">
-                        {{ $t('ai.skip') }}
-                      </el-button>
-                      <el-button v-if="c.status === 'applied'" size="small" :loading="changeBusy === c.id"
-                                 @click="runChange(c, 'undo')">
-                        {{ $t('ai.chgUndo') }}
-                      </el-button>
-                    </div>
-                  </div>
+                     正常情况卡片已经落在时间线的位置上（见上），这里只补「没进时间线」的那几张
+                     （流里丢了 change 帧、时间线为空的老消息），否则卡片会整张消失。 -->
+                <div v-if="orphanChanges(m).length" class="msg-changes">
+                  <AiChangeCard v-for="c in orphanChanges(m)" :key="c.id" :card="c"
+                                :conn-name="connNameOf(c)" :busy="changeBusy === c.id"
+                                @allow="runChange(c, 'allow')" @reject="runChange(c, 'reject')"
+                                @skip="skipChange(c)" @undo="runChange(c, 'undo')"
+                                @unskip="c.skipped = false" />
+                </div>
+                <!-- 等审批：出一张单就停下来等人点，点了（批准或拒绝）会自动接着往下做 ——
+                     不是把剩下的步骤闷在后台，而是把后续的思考和结论继续吐在这段对话里 -->
+                <div v-if="m.waiting && m.jobId" class="msg-await">
+                  <el-icon><Loading /></el-icon>
+                  <span>{{ $t('ai.awaitApprove') }}</span>
                 </div>
                 <!-- 引用溯源：把「这次答话用了哪些团队资料」摊开。
                      能核对才敢信 —— 否则知识库到底有没有生效，用户只能靠猜。 -->
@@ -276,12 +308,25 @@
                      上游没回 usage 就整块不渲染；全项目统一右对齐 -->
                 <AiUsageNote :usage="m.usage" align="right" />
               </div>
+              <!-- 操作条：气泡下方一排小图标（编辑后重发 / 复制），悬停才出现 -->
+              <div v-if="m.role === 'user' && editingIndex !== i" class="msg-tools">
+                <button class="msg-tool" type="button" :title="$t('ai.editMsg')"
+                        :disabled="generating" @click="startEdit(i)">
+                  <el-icon><Edit /></el-icon>
+                </button>
+                <button class="msg-tool" type="button" :title="$t('ai.copyMsg')" @click="copyMsg(m)">
+                  <el-icon><DocumentCopy /></el-icon>
+                </button>
+              </div>
+              </div>
             </div>
-            <div v-if="showTyping" class="msg assistant">
+            <div v-if="showTyping" class="msg assistant is-typing">
               <div class="msg-avatar"><AiMark :size="19" /></div>
-              <div class="msg-bubble typing">
-                <span class="dot"></span><span class="dot"></span><span class="dot"></span>
-                <span v-if="waitingSec >= 3" class="wait">{{ $t('ai.waited', { s: waitingSec }) }}</span>
+              <div class="msg-main">
+                <div class="msg-bubble typing">
+                  <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+                  <span v-if="waitingSec >= 3" class="wait">{{ $t('ai.waited', { s: waitingSec }) }}</span>
+                </div>
               </div>
             </div>
           </template>
@@ -729,8 +774,10 @@ import { saveBlobAs } from '../../utils/useExportTask'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ChatDotRound, DocumentCopy, Close, Cpu, Notebook, Download, Grid, Search, Star, Aim, DataAnalysis, Folder, Loading, ArrowDown, ArrowLeft, ArrowRight, Select, Coin, Connection, Promotion, Switch, Plus, Edit, Collection, Microphone, Bell, Tickets, Delete, MagicStick } from '@element-plus/icons-vue'
 import AiMark from '../../common/AiMark.vue'
+import AiChangeCard from './AiChangeCard.vue'
+import AiToolDetail from './AiToolDetail.vue'
 import { aiChat, aiChatStream, aiDataDict, aiInsight, aiAskStream, aiWarmup, aiExportDoc, getAiConfig, listConnections, listDatabases, listSchemas, listTables, kbList, kbSearch,
-  aiAgentRun, aiThreadList, aiThreadGet, aiThreadDelete, aiThreadRename, aiMemoryList, aiMemoryAdd, aiMemoryDelete,
+  aiAgentStream, aiJobResumeStream, aiThreadList, aiThreadGet, aiThreadDelete, aiThreadTrim, aiThreadRename, aiMemoryList, aiMemoryAdd, aiMemoryDelete,
   aiMemoryDetach,
   aiChangeList, aiChangeAllow, aiChangeApprove, aiChangeConfirm, aiChangeApply, aiChangeUndo, aiChangeReject,
   aiChangeDelete, aiChangeClear,
@@ -750,7 +797,9 @@ import { changePathOf } from '../../utils/sqlTarget'
 import { connNameOf as connNameById } from '../../utils/connNames'
 // 问数的流式步骤合并（running → done 原地升级）：与独立问数工作区共用同一份实现
 import { mergeStep } from '../chatbi/askSteps.js'
-import { listAskHistory, saveAskHistory, removeAskHistory } from '../chatbi/askHistory.js'
+import {
+  listAskHistory, saveAskHistory, removeAskHistory, ensureAskHistoryStore
+} from '../chatbi/askHistory.js'
 // 用量脚注：与 SQL 查询里的 AI 弹窗共用同一个组件，保证「token 消耗」只有一种长相
 import AiUsageNote from '../../common/AiUsageNote.vue'
 // 智能问数回答卡片：懒加载（它连着 echarts，不进 AI 助手的首屏 chunk；问到才拉）
@@ -793,10 +842,15 @@ const emit = defineEmits(['insert-sql', 'close', 'panel', 'run-plan', 'open-know
 // 技能页签 / 对话 / 问数记录上下文都放在跨卸载的模块级 store（panelState.js）：
 // 中央工作区切走页签再切回来，对话原样还在 —— 只有「新对话」才清空
 import { panelState } from './panelState.js'
+import {
+  ensureAiPanelPrefs, readAiComposer, readAiSession, saveAiComposer, saveAiSession
+} from './panelPrefs.js'
 import fastTip from '../../utils/fastTip'
 // 模板里的 v-fast-tip（底栏 chips 收成图标后的快速悬浮提示，120ms）
 const vFastTip = fastTip
-const _ps = panelState[props.mode === 'studio' ? 'studio' : 'panel']
+/** 形态：studio（中央工作区）/ panel（右侧窄面板）—— 两份状态各存各的，同时挂着也不互相覆盖 */
+const _mode = props.mode === 'studio' ? 'studio' : 'panel'
+const _ps = panelState[_mode]
 const tab = toRef(_ps, 'tab')
 
 /**
@@ -1032,11 +1086,12 @@ const kbCfg = ref(null)
 /**
  * 知识库范围：**none=不检索（默认）**｜all=全部库｜custom=只在选中的库里检索。
  *
- * 默认改成「不检索」：检索会把库里的片段拼进提示词 —— 问「这张表怎么设计」这类问题时，
+ * 默认「不检索」：检索会把库里的片段拼进提示词 —— 问「这张表怎么设计」这类问题时，
  * 无关资料既增加往返耗时，又容易把回答带偏（还会在回答下方摆一串"引用了哪些资料"）。
  * 需要的人自己点一下「全部资料库」即可，属于**用的时候开**，而不是默认开着。
  *
- * 这里**不做持久化**：每次打开助手都回到「不检索」，免得某次的临时选择被当成长期偏好。
+ * 选择会跟着底栏其他项一起存（panelPrefs 的 ai.composer.<mode>）：用户 2026-11-19 明确
+ * 要求「刷新之后底栏已经选择的东西不要变」—— 刷新/重启回到刚才那档，只有新用户是 none。
  */
 const kbScope = ref('none')
 const kbPicked = ref([])
@@ -1182,10 +1237,19 @@ const jobBusy = ref('')
 const chatLoading = ref(false)
 /** 结果区滚动容器（新消息时滚到底） */
 const chatBox = ref(null)
-/** 等待中的三点气泡：问数/对话一旦自己有了流式占位（卡片或正在逐字输出），就不该再挂第二个等待态 */
-const showTyping = computed(
-  () => chatLoading.value && !messages.value.some((m) => m.askAnswer?.streaming),
-)
+/**
+ * 等待中的三点气泡：对话一旦自己有了占位（流式消息 / 问数卡片 / 已流出的内容），
+ * 就**不该再挂第二个等待态** —— 否则上一段结论下面会多出一个空气泡（只写「… 3s」），
+ * 用户看到的就是「一个空框」（真机反馈）。
+ */
+const showTyping = computed(() => {
+  if (!chatLoading.value) return false
+  const last = messages.value[messages.value.length - 1]
+  if (!last) return true
+  const occupied = last.role === 'assistant'
+    && (last.streaming || last.askAnswer?.streaming || (last.timeline && last.timeline.length) || last.content)
+  return !occupied
+})
 
 /**
  * Markdown 渲染结果缓存。
@@ -1248,6 +1312,95 @@ const renderMd = (text, sqlActions = false) => {
   if (mdCache.size > 300) mdCache.clear()
   mdCache.set(key, html)
   return html
+}
+
+/** 一段文字开头的步骤标题（`**① 看清表结构**`）；没有就返回空 */
+const stepHeadingOf = (text) => {
+  const first = String(text || '').trim().split('\n')[0] || ''
+  const m = first.match(/\*\*([^*]{1,40})\*\*/)
+  return m ? m[1].trim() : ''
+}
+
+const stepHeadingRe = /^\s*\*\*[^*\n]{1,40}\*\*/
+
+/** 按「步骤标题行」把一段文字切成几步（模型常在一段里连着写 ①②③） */
+const splitByStep = (text) => {
+  const out = []
+  let buf = []
+  for (const line of String(text || '').split('\n')) {
+    if (stepHeadingRe.test(line) && buf.join('').trim()) {
+      out.push(buf.join('\n'))
+      buf = []
+    }
+    buf.push(line)
+  }
+  if (buf.join('').trim()) out.push(buf.join('\n'))
+  return out
+}
+
+/**
+ * 把时间线切成「步骤块」：一步 = 它的叙述 + 它调用的工具。
+ *
+ * 为什么要切块：一条时间线平铺时，①的结论、②的标题、中间夹的工具全贴着，
+ * 读起来就是一大片（用户：「①②是不是跑一起去了」）。切块后每步一个圆角卡片，
+ * 边界一眼可见。变更单与分隔线自己单独一块（不加底色）。
+ */
+const stepGroups = (m) => {
+  const out = []
+  let cur = null
+  const timeline = (m && m.timeline) || []
+
+  /** 一段文字落位：有步骤标题就开新卡（或接回同名那一步），没有就接在当前卡里 */
+  const placeText = (p, pi, text) => {
+    const head = stepHeadingOf(text)
+    if (!head) {
+      if (!cur) {
+        cur = { solo: false, head: '', parts: [] }
+        out.push(cur)
+      }
+      cur.parts.push({ p: { ...p, text }, pi })
+      return
+    }
+    if (cur && cur.head === head) {
+      // 同一步的后续叙述（工具回来之后又写了一段）：接在本步的卡里，去掉重复的标题行
+      const body = text.replace(/^\s*\*\*[^*\n]{1,40}\*\*\s*\n?/, '')
+      if (body.trim()) cur.parts.push({ p: { ...p, text: body }, pi })
+      return
+    }
+    cur = { solo: false, head, parts: [{ p: { ...p, text }, pi }] }
+    out.push(cur)
+  }
+
+  timeline.forEach((p, pi) => {
+    if (p.kind === 'change' || p.kind === 'divider') {
+      out.push({ solo: true, head: '', parts: [{ p, pi }] })
+      cur = null
+      return
+    }
+    if (p.kind === 'text' || p.kind === 'think') {
+      // 一段里写了 ①② 两步是常事：按标题行切开，各进各的卡
+      for (const section of splitByStep(p.text)) placeText(p, pi, section)
+      return
+    }
+    if (!cur) {
+      cur = { solo: false, head: '', parts: [] }
+      out.push(cur)
+    }
+    cur.parts.push({ p, pi })
+  })
+  return out.filter((g) => g.parts.length)
+}
+
+/** 两段 usage 相加（续跑会多几轮调用）；缺一边就取有的那边 */
+const addUsage = (a, b) => {
+  if (!a) return b || null
+  if (!b) return a
+  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0)
+  return {
+    promptTokens: num(a.promptTokens) + num(b.promptTokens),
+    completionTokens: num(a.completionTokens) + num(b.completionTokens),
+    totalTokens: num(a.totalTokens) + num(b.totalTokens),
+  }
 }
 
 // ===== 斜杠命令：在输入框里敲 / 直接唤起功能，无需用文字描述需求 =====
@@ -1593,6 +1746,79 @@ const syncCtxFromProps = () => {
   }
 }
 watch([() => props.conn?.id, () => props.database], syncCtxFromProps, { immediate: true })
+
+// ===== 底栏已选状态的持久化（刷新 / 重启 / 换端口都还在）=====
+// 存 dbmind.db 的 app_settings（见 panelPrefs.js）：localStorage 按 origin 隔离，
+// 桌面壳换端口就丢，所以不放在那儿。
+let prefsHydrated = false
+
+/** 把当前底栏选择写回库（缓存同步生效，落库合并成一次 PUT） */
+const persistComposer = () => {
+  if (!prefsHydrated) return
+  saveAiComposer(_mode, {
+    connId: ctxConnId.value,
+    database: ctxDatabase.value,
+    schema: ctxSchema.value,
+    tables: ctxTables.value.slice(),
+    modelId: selectedModelId.value,
+    agentMode: agentMode.value,
+    kbScope: kbScope.value,
+    kbPicked: kbPicked.value.slice()
+  })
+}
+// 数组用 join 做浅比较：push/splice 改动也能触发（整数组替换当然也触发）
+watch([
+  ctxConnId, ctxDatabase, ctxSchema,
+  () => ctxTables.value.join('\u0001'),
+  selectedModelId, agentMode, kbScope,
+  () => kbPicked.value.join('\u0001')
+], persistComposer)
+
+/**
+ * 刷新/重启后把底栏已选恢复回来。
+ *
+ * <p>刷新时父组件的 conn/database 还是空的（当前连接还没打开），而上面那个
+ * `immediate` 的 watch 会把 ctx 覆盖成空 —— 底栏就成了「什么都没选」。
+ * 所以这里在连接清单拉回来之后，用存下来的值再盖回去：
+ * 连接还在才还原（删掉的连接不认）；当前已经有连接（用户在左侧树点过）时以当前为准。
+ */
+const hydrateComposer = () => {
+  const saved = readAiComposer(_mode)
+  const pid = props.conn?.id ? String(props.conn.id) : ''
+  const alive = saved.connId
+    ? (connList.value || []).some((c) => String(c.id) === String(saved.connId))
+    : false
+  // 存的连接已经不在了：整套回落（库和表都挂在它上面，留着只会让提问打到不存在的连接）
+  if (saved.connId && !alive) {
+    prefsHydrated = true
+    persistComposer()
+    return
+  }
+  if (saved.connId && (!pid || pid === String(saved.connId))) {
+    ctxConnId.value = saved.connId
+    ctxDatabase.value = saved.database
+    ctxSchema.value = saved.schema
+    // 「发送到 AI」带进来的聚焦表优先：那是用户刚点的，不能被上次的勾选顶掉
+    if (!handledPendingSeq) ctxTables.value = saved.tables.slice()
+  }
+  if (saved.modelId) selectedModelId.value = saved.modelId
+  agentMode.value = !!saved.agentMode
+  kbScope.value = saved.kbScope
+  kbPicked.value = saved.kbPicked.slice()
+  prefsHydrated = true
+  // 父组件给了别的连接时，把「以当前为准」的结果落回去，避免下次刷新还原到旧连接
+  if (pid && saved.connId && pid !== String(saved.connId)) persistComposer()
+}
+
+/** 记住「现在打开的是哪一段对话」：刷新后按这个指针接回整段，而不是只挑最近一条 */
+watch([tab, chatThreadId, askThreadId], () => {
+  if (!prefsHydrated) return
+  saveAiSession(_mode, {
+    tab: tab.value,
+    chatThreadId: chatThreadId.value,
+    askThreadId: askThreadId.value
+  })
+})
 
 /** 去掉层级前缀（conn: / db: / sc:） */
 const ctxUnwrap = (v) => String(v || '').replace(/^(conn|db|sc):/, '')
@@ -2441,6 +2667,9 @@ const removeMemory = async (row) => {
   }
 }
 
+/** 这张变更单挂在哪个气泡上（后续续跑要接着写进同一个气泡） */
+const msgOfChange = (change) => messages.value.find((m) => (m.changes || []).some((c) => c.id === change.id))
+
 /**
  * 变更单动作。执行完就地改卡片状态（不重开面板），并把操作人记进流水 ——
  * 「谁批的」比「有人批了」有用得多。
@@ -2459,6 +2688,8 @@ const runChange = async (change, act) => {
       change.status = res.status || 'applied'
       ElMessage.success(t('ai.chgApplied', { n: res.affectedRows ?? -1 }))
       refreshMate()
+      // 批完（这一批都定了）就让智能体接着干活：后续的思考与结论继续吐在同一个气泡里
+      continueJob(msgOfChange(change))
       return
     }
     const call = {
@@ -2474,6 +2705,8 @@ const runChange = async (change, act) => {
     if (act === 'apply') ElMessage.success(t('ai.chgApplied', { n: res.affectedRows ?? -1 }))
     else ElMessage.success(t('ai.chgDone'))
     refreshMate()
+    // 拒绝/执行完也算「这一批处理完了」：接着跑（继续只读验证或换方案）
+    if (act === 'reject' || act === 'apply') continueJob(msgOfChange(change))
   } catch (e) {
     const msg = e?.message || t('ai.requestFailed')
     // 总开关没开（默认关，安全红线）：给一条带「去设置」按钮的通知，
@@ -2498,7 +2731,12 @@ const runChange = async (change, act) => {
  * 跳过：这次不执行，但**不**拒绝 —— 单子仍是 pending，留在「记录」里，
  * 想清楚了下一次还能点允许。只在当前气泡里收起，免得一直占着视线。
  */
-const skipChange = (change) => { change.skipped = true }
+const skipChange = (change) => {
+  change.skipped = true
+  // 全部「先不执行」也算定了：智能体可以接着做剩下的（不落实这张单子）
+  const msg = msgOfChange(change)
+  if (msg) continueJob(msg)
+}
 
 /**
  * 删一条记录。**只删记录**，不撤销已执行的修改 —— 确认框里必须写清楚，
@@ -2559,6 +2797,123 @@ const clearChanges = async () => {
  * 和普通对话的区别是「它自己决定查什么」，所以必须把工具轨迹与产出的变更单
  * 一起摆出来 —— 只给结论不给依据，用户没法判断该不该点执行。
  */
+/**
+ * 深度思考的帧 → 一条**只往下追加**的时间线（首轮与「审批后续跑」共用）。
+ *
+ * <p>关键约束（用户反馈「流式输出怎么跑上面去了」）：任何一段文字都只在它首次出现的位置
+ * 往下长，**绝不回填、绝不挪位**。
+ * 所以 delta 一律追加到时间线最后那个「正在写」的条目上（kind 先按 text 渲染）；
+ * 如果这一轮说完话就去调工具，**同一个元素**原地变成灰色思考块（位置不变），
+ * 工具行接在它下面，下一轮再往下写。结束时不移动任何东西。
+ */
+const agentEventSink = (msg, ctxConn, ctxDb) => {
+  let lastScroll = 0
+  const tick = () => {
+    const now = Date.now()
+    if (now - lastScroll > 60) { lastScroll = now; scrollBottom() }
+  }
+  /** 末尾那段「正在写」的文字（没有就新起一段） */
+  const livePart = () => {
+    const last = msg.timeline[msg.timeline.length - 1]
+    if (last && (last.kind === 'text' || last.kind === 'think')) return last
+    const part = { kind: 'text', text: '' }
+    msg.timeline.push(part)
+    return part
+  }
+  return (ev) => {
+    if (!ev) return
+    if (ev.t === 'delta') {
+      livePart().text += ev.d || ''
+      tick()
+      return
+    }
+    // 这一轮说完话就去调工具：刚才那段是「思考」，原地变灰（不动位置）
+    if (ev.t === 'round_end') {
+      if (ev.calls > 0) {
+        const last = msg.timeline[msg.timeline.length - 1]
+        if (last && (last.kind === 'text' || last.kind === 'think')) {
+          if (last.text.trim()) last.kind = 'think'
+          else msg.timeline.pop() // 一个字都没说：不留空块
+        }
+      }
+      tick()
+      return
+    }
+    if (ev.t === 'step_start') {
+      msg.timeline.push({ kind: 'tool', running: true, tool: ev.tool, args: ev.args })
+      tick()
+      return
+    }
+    if (ev.t === 'step') {
+      // 认领同一次调用的「进行中」条目；没认领到（断帧）就补一条
+      const live = [...msg.timeline].reverse().find((s) => s.kind === 'tool' && s.running)
+      if (live) Object.assign(live, ev.step, { kind: 'tool', running: false })
+      else msg.timeline.push({ kind: 'tool', ...ev.step })
+      tick()
+      return
+    }
+    if (ev.t === 'change' && ev.change) {
+      // 变更单只带 id/sql/risk，卡片上的「连接.库.模式.表」要知道是哪条连接、哪个库
+      const card = { ...ev.change, connectionId: ctxConn, database: ctxDb }
+      // 同一句 SQL 被重复提出时后端会去重、返回**已有**的单号：这里必须更新原卡，
+      // 不能再 push 一张同 id 的（v-for 重复 key，界面上会少画一张卡 ——
+      // 用户看到的就是「提示生成了变更单，但卡片没有」）。
+      const old = (msg.changes || []).find((c) => c.id === card.id)
+      if (old) {
+        Object.assign(old, card)
+        // 之前「跳过」过的单子又被提出来了：把动作放回来，否则是一张点不动的卡
+        old.skipped = false
+      } else {
+        msg.changes.push(card)
+        // **卡片也要按时间顺序落在时间线里**（不能固定堆在气泡底部）：
+        // 否则续跑时新吐的文字会跑到「上一轮那张卡片」的上面，看着像顺序错乱。
+        msg.timeline.push({ kind: 'change', change: card })
+      }
+    }
+  }
+}
+
+/** 气泡里有没有可显示的东西（正文 / 时间线 / 问数结果）—— 决定要不要露「正在生成」的三点 */
+const hasBody = (m) => !!(m && (m.content || (m.timeline && m.timeline.length) || m.askAnswer))
+
+/** 还没落进时间线的变更单（正常都应该落位了；流里丢帧 / 老消息才需要兜底渲染） */
+const orphanChanges = (m) => {
+  const parts = (m && m.timeline) || []
+  const placed = new Set(parts.filter((p) => p.kind === 'change').map((p) => p.change.id))
+  return ((m && m.changes) || []).filter((c) => !placed.has(c.id))
+}
+
+/**
+ * 把服务端那份变更单并进消息。**卡片对象必须复用**：
+ * 时间线里存的就是同一张卡的引用（点了「允许」要立刻变状态），整表换成新对象会让
+ * 时间线上那张变成点不动的僵尸，而 msg.changes 里那份一直停在 pending（续跑不触发）。
+ * 流里没吐出来的新单子补进时间线，插在最后一段文字之前（保持「过程 → 单子 → 结论」）。
+ */
+const mergeChanges = (msg, list, ctxConn, ctxDb) => {
+  const rawById = new Map((list || []).map((r) => [r.id, r]))
+  const next = (msg.changes || []).map((old) => {
+    const raw = rawById.get(old.id)
+    return raw ? Object.assign(old, raw) : old
+  })
+  const seen = new Set(next.map((c) => c.id))
+  for (const raw of list || []) {
+    if (seen.has(raw.id)) continue
+    seen.add(raw.id)
+    next.push({ ...raw, connectionId: ctxConn, database: ctxDb })
+  }
+  msg.changes = next
+  const placed = new Set((msg.timeline || []).filter((p) => p.kind === 'change').map((p) => p.change.id))
+  const fresh = next.filter((c) => !placed.has(c.id))
+  if (!fresh.length) return next
+  const tl = msg.timeline || (msg.timeline = [])
+  let idx = tl.length
+  for (let i = tl.length - 1; i >= 0; i--) {
+    if (tl[i].kind === 'text') { idx = i; break }
+  }
+  tl.splice(idx, 0, ...fresh.map((c) => ({ kind: 'change', change: c })))
+  return next
+}
+
 const runAgentChat = async (text) => {
   // 多轮上下文：与普通对话同一份口径（最近 8 条，成对出现）
   // 少了这一份，「继续 / 那就按这个改」智能体会答「上次的上下文我这边没有」，
@@ -2572,11 +2927,27 @@ const runAgentChat = async (text) => {
   chatLoading.value = true
   startWait()
   scrollBottom()
-  // 停止按钮：深挖是普通 POST，挂在 signal 上 —— 中断后界面立刻松开（服务端那轮模型调用会自然结束并丢弃）
+  // 停止按钮：流式请求同样挂在 signal 上 —— 中断后界面立刻松开（服务端那轮会自然结束并丢弃）
   stopCtrl = new AbortController()
   const ctrl = stopCtrl
+  // 这个气泡是**边跑边长**的：思考（灰）→ 工具调用 → 变更单 → 结论（正文）
+  const msg = reactive({
+    role: 'assistant',
+    content: '',
+    // 时间线：text（回答/正在写的字）· think（这一轮的思考，灰）· tool（工具调用）
+    timeline: [],
+    changes: [],
+    usage: null,
+    jobId: '',
+    streaming: true,
+    waiting: false
+  })
+  messages.value.push(msg)
+  const ctxConn = ctxConnId.value
+  const ctxDb = ctxEffectiveDatabase.value
+  const onEv = agentEventSink(msg, ctxConn, ctxDb)
   try {
-    const res = await aiAgentRun({
+    const res = await aiAgentStream({
       prompt: text,
       tables: ctxTables.value.slice(),
       connectionId: ctxConnId.value,
@@ -2584,34 +2955,112 @@ const runAgentChat = async (text) => {
       modelId: selectedModelId.value,
       threadId: chatThreadId.value || undefined,
       history,
-      maxRounds: 6
-    }, { signal: ctrl.signal })
-    if (!res || !res.success) throw new Error(res?.message || t('ai.requestFailed'))
-    if (res.threadId) chatThreadId.value = res.threadId
-    messages.value.push(reactive({
-      role: 'assistant',
-      content: res.content || '',
-      steps: res.steps || [],
-      // 变更单只带 id/sql/risk，卡片上的「连接.库.模式.表」还要知道是哪条连接、哪个库 —— 用本次提问的上下文补上
-      changes: (res.changes || []).map((c) => ({
-        ...c,
-        connectionId: ctxConnId.value,
-        database: ctxEffectiveDatabase.value
-      })),
-      usage: null
-    }))
-    if ((res.changes || []).length) refreshMate()
+      // 按步骤做（看表 → 看结构 → 取证 → 给建议 → 出单）每步都要查几条，
+      // 6 轮会卡在「还没下结论」上；后端上限 12，用尽时会强制再要一次结论
+      maxRounds: 10,
+      // 知识库范围：与普通对话同义（null = 全部、[] = 本次不注入、[...] = 指定库）。
+      // 底栏选了什么就要真生效 —— 以前深度思考不发这个字段，选了「全部资料库」它也不查
+      kbIds: kbIdsForQuery(),
+      // 选中的插件技能同样带过去（后端把提示词拼进 system）：选着技能切深度思考不该失效
+      pluginSkills: pickedSkills.value.map((s) => s.id),
+      // 落库：与普通对话同一口径 —— 智能体以前不进会话，刷新后这段对话直接消失
+      persist: !chatThreadId.value
+    }, onEv, { signal: ctrl.signal })
+    if (res && res.threadId) { chatThreadId.value = res.threadId; if (isStudio.value) loadThreads() }
+    // 收尾：末尾那段「正在写的字」就是回答正文；工具条目以服务端那份为准（防丢帧）
+    settleTimeline(msg, res)
+    msg.jobId = (res && res.jobId) || ''
+    // 整次回答的 token 用量（后端按轮相加后随 done 帧回来），气泡底部脚注要用
+    if (res && res.usage) msg.usage = addUsage(msg.usage, res.usage)
+    if (res && Array.isArray(res.changes) && res.changes.length) mergeChanges(msg, res.changes, ctxConn, ctxDb)
+    // 有单子就是「等审批」：界面提示「批准后我接着往下做」，点完会自动续跑
+    msg.waiting = msg.changes.length > 0
+    if (msg.waiting) refreshMate()
   } catch (e) {
-    if (isCanceled(e)) {
-      messages.value.push({ role: 'assistant', content: '> ⏱ ' + t('ai.interrupted', { detail: t('api.generationStopped') }) })
-    } else {
-      messages.value.push({ role: 'assistant', content: '❌ ' + (e?.message || t('ai.requestFailed')) })
-    }
+    // 中断/失败都把已流出的部分留着（思考与结论都算跑过的东西），末尾补一行说明
+    msg.timeline.push({ kind: 'think', text: (isCanceled(e) ? '⏱ ' : '❌ ') + (isCanceled(e) ? t('api.generationStopped') : (e?.message || t('ai.requestFailed'))) })
   } finally {
+    msg.streaming = false
+    msg.timeline = msg.timeline.map((s) => (s.kind === 'tool' ? { ...s, running: false } : s))
     if (stopCtrl === ctrl) stopCtrl = null
     chatLoading.value = false
     stopWait()
     scrollBottom()
+  }
+}
+
+/**
+ * 审批后继续：这一批变更单都处理完了，就让这张 job 接着往下跑。
+ *
+ * <p>服务端按已落库的步骤**重放**（不会再执行任何工具），新的思考、工具与结论
+ * 继续吐在同一个气泡里 —— 用户看到的是「批完之后它接着干活」，而不是整段结果一次砸下来。
+ */
+const continueJob = async (msg) => {
+  if (!msg || !msg.jobId || msg.continuing) return
+  // 还有没定的单子：等人把这一批都处理完再接着跑（否则点一张就续一次，后续步骤白跑）
+  const pendingLeft = (msg.changes || []).some((c) => c.status === 'pending' && !c.skipped)
+  if (pendingLeft) return
+  msg.continuing = true
+  msg.waiting = false
+  msg.streaming = true
+  chatLoading.value = true
+  startWait()
+  stopCtrl = new AbortController()
+  const ctrl = stopCtrl
+  const c0 = (msg.changes || [])[0] || {}
+  const ctxConn = c0.connectionId || ctxConnId.value
+  const ctxDb = c0.database || ctxEffectiveDatabase.value
+  const onEv = agentEventSink(msg, ctxConn, ctxDb)
+  // 分隔线：续跑的字要另起一段往下写（不接在上一段结论的末尾）
+  msg.timeline.push({ kind: 'divider' })
+  try {
+    // 聚焦表按**当前底栏**传：用户中途换了表，续跑就该按新表来（不是 job 里那张旧表）
+    const res = await aiJobResumeStream(msg.jobId, {
+      maxRounds: 10,
+      tables: ctxTables.value.slice()
+    }, onEv, { signal: ctrl.signal })
+    settleTimeline(msg, res, true)
+    // 续跑也花了 token：累加到底部脚注，别让数字只反映第一段
+    if (res && res.usage) msg.usage = addUsage(msg.usage, res.usage)
+    if (res && Array.isArray(res.changes) && res.changes.length) mergeChanges(msg, res.changes, ctxConn, ctxDb)
+    if (res && res.jobId) msg.jobId = res.jobId
+    msg.waiting = (msg.changes || []).some((c) => c.status === 'pending' && !c.skipped)
+    if (msg.changes.length) refreshMate()
+  } catch (e) {
+    msg.timeline.push({ kind: 'think', text: (isCanceled(e) ? '⏱ ' : '❌ ') + (isCanceled(e) ? t('api.generationStopped') : (e?.message || t('ai.requestFailed'))) })
+  } finally {
+    msg.continuing = false
+    msg.streaming = false
+    msg.timeline = msg.timeline.map((s) => (s.kind === 'tool' ? { ...s, running: false } : s))
+    if (stopCtrl === ctrl) stopCtrl = null
+    chatLoading.value = false
+    stopWait()
+    scrollBottom()
+  }
+}
+
+/**
+ * 收尾：把时间线定格。
+ *  - 末尾那段 `text` 就是结论（写进 m.content —— 历史、复制、导出都靠它）；
+ *  - 工具条目以服务端返回的 steps 为准（流里万一断帧也不丢）。
+ * `append` = 续跑：结论接在前一段后面，而不是把它顶掉。
+ */
+const settleTimeline = (msg, res, append = false) => {
+  const timeline = msg.timeline
+  const lastText = [...timeline].reverse().find((p) => p.kind === 'text')
+  if (lastText) {
+    msg.content = append ? [msg.content, lastText.text].filter(Boolean).join('\n\n') : lastText.text
+  } else if (res && res.content) {
+    timeline.push({ kind: 'text', text: res.content })
+    msg.content = append ? [msg.content, res.content].filter(Boolean).join('\n\n') : res.content
+  }
+  // 服务端的步骤比流里全：缺的补在结论之前（不打断「先过程、后结论」的阅读顺序）
+  const have = timeline.filter((p) => p.kind === 'tool').length
+  const steps = (res && res.steps) || []
+  if (steps.length > have) {
+    const extra = steps.slice(have).map((s) => ({ kind: 'tool', ...s }))
+    const idx = lastText ? timeline.indexOf(lastText) : timeline.length
+    timeline.splice(idx >= 0 ? idx : timeline.length, 0, ...extra)
   }
 }
 
@@ -2664,6 +3113,8 @@ const openAskHistory = (h) => {
     { role: 'user', content: t.q },
     { role: 'assistant', content: '', askAnswer: t.answer },
   ])
+  // 换记录时退出编辑态（否则编辑框会挂在新记录的同一条下标上）
+  editingIndex.value = -1
   scrollBottom()
 }
 const deleteAskHistory = (h) => {
@@ -2715,31 +3166,122 @@ const applyThread = async (id) => {
   // 会话内容被对话线程整个换掉了：问数记录的「当前对话」也随之作废，
   // 之后的追问该另起一条记录，而不是并进一条八竿子打不着的旧记录
   askThreadId.value = ''
+  // 变更单的最新状态以「记录」里的那份为准（消息 meta 里存的是生成时的快照）：
+  // 用户批准/拒绝后刷新，卡片不该还写着「待确认」
+  const chgById = new Map((changes.value || []).map(c => [c.id, c]))
   messages.value = rows.map(row => {
-    // 落库时把技能名写进 meta.skills；老消息没有 meta（null）就没有标签
+    // 落库时把技能名写进 meta.skills、智能体的工具轨迹与变更单写进 meta.steps/changes；
+    // 老消息没有 meta（null）就没有这些
     const meta = row.meta && typeof row.meta === 'object' ? row.meta : null
     const skills = Array.isArray(meta?.skills)
       ? meta.skills.map((name, i) => ({ id: `s${i}`, name: String(name) }))
       : []
+    const chgCards = Array.isArray(meta?.changes)
+      ? meta.changes.map((c) => {
+        const live = chgById.get(c?.id)
+        return live ? { ...c, status: live.status, error: live.error || c.error, appliedAt: live.appliedAt } : c
+      })
+      : []
+    // 老会话里存着「（只基于表 … 回答…）」这段元指令：不剥掉的话，重开记录就看见
+    // 一行用户从没敲过的话（还会被当成历史再次发给模型，强化「不要扩散」）
+    const bodyText = stripScopeHint(row.content)
+    // 深度思考的还原：**每一步的叙述 + 这一步的工具**，按轮次放回去（meta.texts 是每轮说过的
+    // 那段话）。没有 texts 的老消息只能退回「工具全堆在前面」—— 用户反馈「刷新后位置变了」
+    // 就是老行为：工具全在最上面，看图和结论对不上。
+    const steps = Array.isArray(meta?.steps) ? meta.steps : []
+    const thoughtByRound = new Map()
+    for (const one of (Array.isArray(meta?.texts) ? meta.texts : [])) {
+      const text = typeof one?.text === 'string' ? one.text.trim() : ''
+      if (text) thoughtByRound.set(Number(one.round) || 0, one.text)
+    }
+    let parts = []
+    if (steps.length) {
+      const rounds = [...new Set(steps.map((s) => Number(s.round) || 0))].sort((a, b) => a - b)
+      for (const round of rounds) {
+        const said = thoughtByRound.get(round)
+        if (said) parts.push({ kind: 'think', text: said })
+        for (const s of steps) {
+          if ((Number(s.round) || 0) === round) parts.push({ kind: 'tool', ...s })
+        }
+      }
+      if (bodyText) parts.push({ kind: 'text', text: bodyText })
+    }
+    // 变更单也落进时间线：卡片就是按位置渲染的，只留在 changes 里会画不出来
+    const timeline = chgCards.length
+      ? [...parts, ...chgCards.map((c) => ({ kind: 'change', change: c }))]
+      : parts
     return {
       role: row.role,
-      // 老会话里存着「（只基于表 … 回答…）」这段元指令：不剥掉的话，重开记录就看见
-      // 一行用户从没敲过的话（还会被当成历史再次发给模型，强化「不要扩散」）
-      content: stripScopeHint(row.content),
+      // 服务端消息 id：编辑这条重新作答时按它精确剪掉后面的问答
+      msgId: typeof row.id === 'number' ? row.id : undefined,
+      content: bodyText,
       usage: row.usage ? safeParse(row.usage) : null,
-      skills
+      skills,
+      timeline,
+      changes: chgCards,
+      // 重开记录后还要能「批准后继续」：jobId 存进 meta，等审批的单子也照旧提示
+      jobId: (meta && typeof meta.jobId === 'string') ? meta.jobId : '',
+      waiting: chgCards.some((c) => c.status === 'pending')
     }
   })
+  // 换记录时退出编辑态（编辑框是按下标挂的，换了内容就会挂错）
+  editingIndex.value = -1
   scrollBottom()
 }
 
-/** 打开面板时接上次的会话：不恢复的话「关掉再打开」永远从零开始，记忆也显得没生效 */
-const restoreThread = async () => {
+/**
+ * 刷新后接回「刚才打开的那一段对话」，而不是只挑最近一条。
+ *
+ * <p>两类记录分开存：问数（`/api/ai/ask`）在本地 localStorage 里按 id 存整段问答，
+ * 自由对话 / 深度思考在服务端 ai_threads 里 —— 指针（ai.session）记住是哪一个，
+ * 刷新后按类型各自还原。只按「最近一条会话」恢复的话，问数对话刷新后对话区是空的
+ * （记录还在左栏，用户看到的就是「对话丢了」）。
+ *
+ * <p>没有指针 / 指针指向的记录已被删掉时，退回「最近一条会话」——
+ * 不恢复的话「关掉再打开」永远从零开始，记忆也显得没生效。
+ */
+const restoreSession = async () => {
+  await ensureAiPanelPrefs()
+  // 页签切走再切回：panelState 里对话还留着，别覆盖（这是跨卸载，不是刷新）
   if (messages.value.length) return
-  await loadThreads()
+  const s = readAiSession(_mode)
+  // 左栏「记录」清单：studio 才渲染，但要先拉——兜底恢复要靠它拿「最近一条」
+  const listLoad = isStudio.value ? loadThreads() : null
+  if (s.askThreadId) {
+    const h = (askHist.value || []).find((x) => x.id === s.askThreadId)
+    if (h) {
+      openAskHistory(h)
+      if (listLoad) await listLoad
+      return
+    }
+  }
+  if (s.chatThreadId) {
+    if (['chat', 'insight', 'dictionary'].includes(s.tab)) tab.value = s.tab
+    try {
+      await applyThread(s.chatThreadId)
+      if (listLoad) await listLoad
+      return
+    } catch { /* 记录被删了：走下面的兜底 */ }
+  }
+  if (listLoad) await listLoad
   const latest = threads.value[0]
   if (!latest) return
   try { await applyThread(latest.id) } catch { /* 恢复失败就当新对话，不打扰用户 */ }
+}
+
+/**
+ * 面板挂载时的恢复顺序：先读库里的偏好（要等一次请求）→ 再拉连接清单
+ * （恢复的连接要校验还在）→ 套用底栏选择 → 接回上次那段对话。
+ */
+const bootRestore = async () => {
+  await ensureAiPanelPrefs()
+  // 问数记录：换端口后 localStorage 是空的（origin 变了），从库里那份镜像灌回来 ——
+  // 必须在 restoreSession 之前，否则指针指向的那条记录还「不存在」
+  await ensureAskHistoryStore()
+  askHist.value = listAskHistory()
+  await loadConnList()
+  hydrateComposer()
+  await restoreSession()
 }
 
 /** 点左栏某条记录：续聊这一段，并把技能切回「自由对话」（会话内容是对话技能的） */
@@ -2808,6 +3350,67 @@ const scrollBottom = () => nextTick(() => {
 
 const copySql = async (text) => {
   try { await navigator.clipboard.writeText(text); ElMessage.success(t('ai.copied')) } catch (e) { ElMessage.error(t('sqlq.copyFailed')) }
+}
+
+// ---------------------------------------------------------------- 用户消息：编辑 / 复制
+/** 正在编辑的提问下标（-1 = 没有在编辑） */
+const editingIndex = ref(-1)
+const editingText = ref('')
+
+const startEdit = (i) => {
+  const m = messages.value[i]
+  if (!m || m.role !== 'user' || generating.value) return
+  editingIndex.value = i
+  editingText.value = m.content || ''
+  nextTick(() => {
+    const el = document.querySelector(`.ai-panel .msg-edit-input textarea`)
+    if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length) }
+  })
+}
+const cancelEdit = () => {
+  editingIndex.value = -1
+  editingText.value = ''
+}
+
+/**
+ * 编辑后重新作答：**这条提问之后的问答全部作废**，用新内容重新发一遍。
+ *
+ * <p>不新开会话：仍然接着同一条记录（服务端会话是追加式的，重答就是新的一轮），
+ * 这样「追问的上文」还在，用户也不会突然多出一堆记录。
+ */
+const submitEdit = async () => {
+  const text = editingText.value.trim()
+  const idx = editingIndex.value
+  if (!text || idx < 0 || generating.value) return
+  // 服务端会话也剪掉：把这条（含）之后的问答删掉，否则刷新/重开时旧答案又整段回来，等于没改。
+  // 优先用它自己的消息 id（精确）；老消息没有 id 才退回「前 idx 条」。
+  if (chatThreadId.value && tab.value !== 'ask') {
+    const before = messages.value[idx] && messages.value[idx].msgId
+    try {
+      await aiThreadTrim(chatThreadId.value, before ? { beforeId: before } : { keep: idx })
+    } catch { /* 剪失败不挡重发 */ }
+  }
+  // 问数记录存在本地：改的是这条记录里的某一问 ⇒ 整条记录作废，重发时会新建一条，
+  // 否则点开旧记录，被改掉的那几轮又回来了
+  if (tab.value === 'ask' && askThreadId.value) {
+    removeAskHistory(askThreadId.value)
+    askThreadId.value = ''
+    askHist.value = listAskHistory()
+  }
+  // splice(idx) 把这条（它自己也要重发）及之后的消息全部去掉
+  messages.value.splice(idx)
+  cancelEdit()
+  aiInput.value = text
+  await sendChat()
+}
+
+const copyMsg = async (m) => {
+  try {
+    await navigator.clipboard.writeText(m.content || '')
+    ElMessage.success(t('ai.copied'))
+  } catch (e) {
+    ElMessage.error(t('sqlq.copyFailed'))
+  }
 }
 
 /** Agent 工具名 → 中文标签：轨迹里显示中文，用户才知道它「真的查了库」 */
@@ -2950,13 +3553,12 @@ const loadInboxData = () => {
 
 onMounted(() => {
   scrollBottom()
-  loadConnList()
   warmCtx()
   // 插件清单要先拉到：历史消息只存技能名，气泡上的 emoji 图标靠清单按名反查
   loadPluginSkills()
-  // 接上次会话**必须首屏就跑**：用户可能先点「发送到 AI」，那一刻对话得已经恢复在，
+  // 接上次会话 + 底栏已选**必须首屏就跑**：用户可能先点「发送到 AI」，那一刻对话得已经恢复在，
   // 否则这条新消息会插进空对话里，历史看起来"被清空了"。
-  restoreThread()
+  bootRestore()
   if (props.active) loadInboxData()
 })
 watch(() => props.active, (v) => { if (v) loadInboxData() })
@@ -3358,9 +3960,18 @@ watch([currentModelLabel, kbScopeLabel, () => ctxTables.value.length, () => loca
 .msg.user .msg-avatar { background: linear-gradient(135deg, var(--dc-primary), var(--dc-purple)); color: var(--dc-on-primary); box-shadow: 0 2px 8px var(--dc-primary-glow); }
 .msg.assistant .msg-avatar { background: var(--ai-bubble-bg); color: var(--dc-purple); border: 1px solid var(--dc-border); }
 /* 用量脚注的样式在 common/AiUsageNote.vue（与 SQL 查询的 AI 弹窗共用一套） */
+/* 气泡 + 下方操作条：外层这一列负责对齐（用户靠右、助手靠左），
+   气泡本身不再吃 100% 宽度 —— 长回答最多 820px，短句跟着内容走 */
+.msg-main {
+  display: flex; flex-direction: column; gap: 3px;
+  min-width: 0; flex: 0 1 auto;
+  max-width: min(820px, calc(100% - 40px));
+}
+.msg.assistant .msg-main { align-items: flex-start; }
+.msg.user .msg-main { align-items: flex-end; }
 .msg-bubble {
   position: relative; min-width: 0;
-  max-width: min(820px, calc(100% - 40px));
+  max-width: 100%;
   /* 单行消息的高度一路收：11px 内边距 + 1.8 行高 = 47px → 8px/1.7 = 40px（还是显高）
      → 6px 内边距 + 1.55 行高 ≈ 34px，刚好跟 28px 的头像对得上，也不至于挤到文字。
      四个角统一 12px 圆角（原来贴着头像那一角是 4px 直角）。 */
@@ -3368,6 +3979,8 @@ watch([currentModelLabel, kbScopeLabel, () => ctxTables.value.length, () => loca
   font-size: 14px; line-height: 1.55;
   transition: box-shadow .18s ease, border-color .18s ease;
 }
+/* 助手的回答给足呼吸感：行距放宽、上下留白多一点（贴边的长文看着很闷） */
+.msg.assistant .msg-bubble { padding: 10px 14px; line-height: 1.7; }
 /* 用户气泡：主色与面板底按比例混合出的柔和蓝（不透明，保证箭头同色无缝），
    比纯主色实底更内敛；不支持 color-mix 时回退为半透明主色 */
 .msg.user { --user-bubble-bg: var(--dc-primary-soft); }
@@ -3451,6 +4064,29 @@ watch([currentModelLabel, kbScopeLabel, () => ctxTables.value.length, () => loca
 .msg-skill-tag .msg-skill-ic > svg { width: 9px; height: 9px; }
 .msg-skill-tx { line-height: 1.6; }
 .msg-body { white-space: pre-wrap; }
+/* 用户消息：气泡**下方**一排小图标（编辑 / 复制）。
+   常驻显示会把气泡撑高又抢视线，悬停出来最安静；键盘焦点也算「悬停」（focus-within）。 */
+.msg-tools {
+  display: flex; gap: 2px; margin-top: 1px;
+  opacity: 0; transition: opacity .15s ease;
+}
+.msg:hover .msg-tools, .msg-tools:focus-within { opacity: 1; }
+.msg-tool {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; padding: 0; border: none; border-radius: 6px;
+  background: transparent; color: var(--dc-text-dim); cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+.msg-tool:hover:not(:disabled) { background: var(--ai-inset-bg, var(--dc-bg-soft)); color: var(--dc-text); }
+.msg-tool:disabled { opacity: .45; cursor: not-allowed; }
+.msg-tool .el-icon { font-size: 13px; }
+/* 编辑态：输入框 + 取消 / 重新发送。
+   原来框只有一句提问那么大，改长问题要滚 —— 给一个下限宽度、更松的行高 */
+.msg-edit { display: flex; flex-direction: column; gap: 8px; width: 100%; min-width: min(460px, 64vw); }
+.msg-edit-input :deep(.el-textarea__inner) {
+  font-size: 13.5px; line-height: 1.7; padding: 8px 10px;
+}
+.msg-edit-acts { display: flex; justify-content: flex-end; gap: 6px; }
 /* 消息内代码块：底色比气泡深一档（--ai-inset-bg），靠底色而不是边框拉开层次，
    去掉描边后块内更干净、也不与气泡边框「线条打架」。
    注意 v-html 渲染出来的 <pre> 没有 scoped 属性，必须用 :deep() 才能命中 */
@@ -3460,7 +4096,25 @@ watch([currentModelLabel, kbScopeLabel, () => ctxTables.value.length, () => loca
   border-radius: 8px;
   line-height: 1.65;
 }
-.typing { display: flex; align-items: center; gap: 4px; padding: 14px 16px; }
+/* 等待气泡：高度锁成「一行消息」——上下 6px 内边距 + 一行文字（1.55 行高、14px 字号），
+   与右侧我的气泡完全等高（原来 14px padding，加上「已等待 N 秒」的文字行，
+   整块比一行消息高出一截，看着像另一条完整回答）。 */
+.typing {
+  display: flex; align-items: center; gap: 4px;
+  padding: 2px 2px;
+  white-space: nowrap;
+}
+/* 等待态不再画一个「空框」：去掉底色/描边/小箭头，只留三点 + 已等待秒数，
+   否则上一段结论下面会多出一个只有「… 3s」的灰盒子（用户拍图说「空框很难看」）。 */
+.msg.assistant.is-typing .msg-bubble,
+.msg.assistant .msg-bubble.typing {
+  background: transparent; border: none; box-shadow: none;
+  padding: 2px 2px; min-height: 0;
+}
+.msg.assistant.is-typing .msg-bubble::before,
+.msg.assistant.is-typing .msg-bubble::after,
+.msg.assistant .msg-bubble.typing::before,
+.msg.assistant .msg-bubble.typing::after { display: none; }
 .typing .dot { width: 6px; height: 6px; border-radius: 8px; background: var(--dc-text-dim); animation: dc-blink 1.2s infinite; }
 .typing .dot:nth-child(2) { animation-delay: .2s; }
 .typing .dot:nth-child(3) { animation-delay: .4s; }
@@ -3669,17 +4323,95 @@ watch([currentModelLabel, kbScopeLabel, () => ctxTables.value.length, () => loca
 .ai-plain-select :deep(.el-select__caret) { color: var(--dc-text-weak); }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 
-/* Agent 工具调用轨迹 */
-.msg-steps { margin-top: 10px; border-top: 1px dashed var(--dc-border); padding-top: 8px; display: flex; flex-direction: column; gap: 5px; }
-.msg-steps-head {
-  display: flex; align-items: center; gap: 5px; margin-bottom: 2px;
-  font-size: 12px; font-weight: 600; color: var(--dc-text-dim);
+/* ===== 深度思考：一条只往下长的时间线（思考灰、工具 chip、结论正常） ===== */
+.ai-timeline { display: flex; flex-direction: column; gap: 10px; }
+.ai-timeline > .tl-text { margin: 0; }
+/* 步骤块：一步一个圆角卡（本步的叙述 + 本步的工具），块与块之间留空 ——
+   平铺时 ①的结论、②的标题、中间的工具全贴在一起，读起来像「两步跑一起去了」。 */
+.tl-step {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 9px 11px;
+  border-radius: 12px;
+  background: var(--ai-inset-bg, var(--dc-bg-soft));
+  border: 1px solid var(--dc-border-soft, var(--dc-border));
 }
-.msg-steps-head .el-icon { color: var(--dc-purple); font-size: 13px; }
-.msg-step { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dc-text-dim); overflow: hidden; background: var(--ai-inset-bg, var(--dc-bg-soft)); border-radius: 8px; padding: 3px 8px; }
-.msg-step .el-icon { color: var(--dc-purple); flex-shrink: 0; }
-.step-tool { color: var(--dc-link); font-weight: 600; flex-shrink: 0; }
-.step-args { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 变更单 / 分隔线自己一块，不加底色（卡片本来就有自己的框） */
+.tl-step.is-solo { padding: 0; background: transparent; border: none; }
+/* 思考文字：块底已经给了层次，这里只把字压暗，不再画左侧竖条（用户要求去掉） */
+.tl-think {
+  align-self: stretch;
+  font-size: 12.5px; line-height: 1.7; color: var(--dc-text-mid);
+  word-break: break-word;
+  max-height: 320px; overflow: auto;
+}
+/* v-html 进来的段落（scoped 样式要用 :deep 才够得着） */
+.tl-think :deep(> :first-child) { margin-top: 0; }
+.tl-think :deep(> :last-child) { margin-bottom: 0; }
+.tl-think :deep(p) { margin: .35em 0; }
+.tl-think :deep(h1), .tl-think :deep(h2), .tl-think :deep(h3), .tl-think :deep(h4) {
+  font-size: 13px; margin: .6em 0 .25em;
+}
+/* 灰底里嵌代码块 / 表格：底色再压一点，避免和思考块的底糊在一起 */
+.tl-think :deep(pre) { margin: .4em 0; }
+.tl-think :deep(table) { font-size: 12px; margin: .5em 0; }
+.tl-think :deep(li) { margin: .15em 0; }
+/* 工具调用：紧凑的胶囊，参数允许折成两行（原来单行省略，SQL 被截得看不出查了什么）。
+   用 grid 而不是 flex-wrap：耗时要始终钉在右上角，不能被长参数挤到第二行去。 */
+.tl-tool-wrap {
+  align-self: flex-start; max-width: 100%; min-width: 0;
+  border-radius: 9px;
+  /* 工具行在步骤卡里：透明底 + 细描边，和卡的底拉开一层，又不会多出一块深色 */
+  background: transparent;
+  border: 1px solid var(--dc-border-soft, var(--dc-border));
+}
+.tl-tool-wrap.is-open {
+  border-color: var(--dc-border);
+  background: var(--dc-bg-card);
+}
+.tl-tool {
+  /* 抽出后只剩 4 格：箭头 / 图标 / 工具名 / 耗时（原来的参数摘要已进展开体） */
+  display: grid; grid-template-columns: auto auto auto minmax(0, 1fr);
+  align-items: center; column-gap: 6px; row-gap: 2px;
+  width: 100%; max-width: 100%;
+  padding: 5px 10px; border-radius: 10px;
+  border: none; background: transparent; text-align: left;
+  font-family: inherit;
+  font-size: 12px; color: var(--dc-text-dim); line-height: 1.5;
+  cursor: pointer;
+}
+.tl-tool:hover { background: var(--dc-primary-wash); }
+.tl-tool-caret { color: var(--dc-text-weak); font-size: 11px; transition: transform .15s ease; }
+.tl-tool-wrap.is-open .tl-tool { color: var(--dc-text-mid); }
+.tl-tool-wrap.is-open .tl-tool-caret { color: var(--dc-primary); }
+.tl-tool .el-icon { color: var(--dc-purple); font-size: 13px; }
+.tl-tool-name { color: var(--dc-link); font-weight: 600; white-space: nowrap; }
+/* 收起态只有「工具名 + 耗时」：表名 / SQL 摘要一律进展开体（用户：后面只留时间就好） */
+.tl-tool-ms { justify-self: end; font-size: 11px; color: var(--dc-text-dim); white-space: nowrap; }
+/* 正在跑：描边提亮 + 转圈，让「它在动」看得见 */
+.tl-tool-wrap.is-run { border-color: var(--dc-primary); background: var(--dc-primary-wash); }
+.tl-tool-wrap.is-bad .tl-tool-name { color: var(--dc-danger, #d64545); }
+/* 展开体：与胶囊连成一张卡（上边一条细线分隔），内容样式在 AiToolDetail.vue */
+.tl-tool-detail {
+  border-top: 1px solid var(--dc-border);
+  min-width: 0;
+}
+/* 续跑分隔：只有一条细线（用户明确说别显示「接着做」三个字） */
+.tl-sep {
+  height: 1px; margin: 5px 0; align-self: stretch;
+  background: var(--dc-border); opacity: .75;
+}
+.is-spin { animation: aiSpin 1s linear infinite; }
+@keyframes aiSpin { to { transform: rotate(360deg); } }
+/* 等审批：出单后停在这里，点「允许 / 拒绝」才继续。
+   做成一个虚线小胶囊（而不是一行裸字 + 转圈），一眼看出「这是等我操作」而不是报错 */
+.msg-await {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-top: 10px; padding: 3px 10px; border-radius: 999px;
+  background: rgba(209, 154, 0, .12);
+  border: 1px dashed rgba(209, 154, 0, .45);
+  font-size: 12px; color: var(--dc-warn, #b8860b);
+}
+.msg-await .el-icon { animation: aiSpin 2s linear infinite; }
 
 /* ===== 引用溯源：回答下方那条「引用了 N 段团队资料」 ===== */
 .msg-sources {
@@ -3741,54 +4473,16 @@ watch([currentModelLabel, kbScopeLabel, () => ctxTables.value.length, () => loca
   text-align: center;
 }
 
-/* 变更单卡片：风险色条 + 等宽 SQL + 撤销语句，一眼看清「点了会发生什么」 */
+/* 变更单卡片的样式在 AiChangeCard.vue（对话时间线里就地渲染、记录抽屉复用同一张卡） */
 .msg-changes { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
-.chg-card {
-  border: 1px solid var(--dc-border);
-  border-left: 3px solid var(--dc-primary);
-  border-radius: 6px;
-  background: var(--dc-bg-card);
-  padding: 8px 10px;
-}
-.chg-card.is-medium { border-left-color: #d19a00; }
-.chg-card.is-high { border-left-color: var(--dc-danger); }
-.chg-head { display: flex; align-items: center; gap: 8px; }
-.chg-risk {
-  flex: none;
-  padding: 0 6px;
-  border-radius: 4px;
-  font-size: 11px;
-  line-height: 18px;
-  background: var(--dc-primary-soft);
-  color: var(--dc-primary);
-}
-.chg-card.is-medium .chg-risk { background: rgba(209, 154, 0, .14); color: #a87900; }
-.chg-card.is-high .chg-risk { background: rgba(220, 60, 60, .14); color: var(--dc-danger); }
-.chg-title { flex: 1; min-width: 0; font-size: 12px; color: var(--dc-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chg-state { flex: none; font-size: 11px; color: var(--dc-text-weak); }
-.chg-sql {
-  margin: 6px 0 0;
-  padding: 6px 8px;
-  border-radius: 4px;
-  background: var(--dc-bg-deep);
-  color: var(--dc-text-mid);
-  font-size: 12px;
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-/* 定位路径 chip：与聚焦表 tag 同一副长相（描边小圆角），能一眼看出改的是哪张表 */
-.chg-path, .rec-path {
+/* 记录页里的定位路径 chip：与聚焦表 tag 同一副长相（描边小圆角），一眼看出是哪张表 */
+.rec-path {
   display: inline-flex; align-items: center; max-width: 100%;
-  margin-top: 6px; padding: 0 6px; height: 19px; border-radius: 5px;
+  margin-top: 0; padding: 0 6px; height: 19px; border-radius: 5px;
   border: 1px solid var(--dc-border); background: var(--dc-bg-soft);
   font-size: 11px; line-height: 19px; color: var(--dc-text-mid);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.rec-path { margin-top: 0; }
-.chg-undo { margin-top: 6px; font-size: 11px; color: var(--dc-text-dim); word-break: break-all; }
-.chg-acts { margin-top: 8px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-/* 跳过 = 这次不执行（单子仍留在「记录」里可再执行），整卡压暗一档，别和待处理混在一起 */
-.chg-card.is-skipped { opacity: .55; }
 
 /* 服务端提示条（预算降级等）：比正文弱一档，但必须看得见 */
 .msg-notice {

@@ -760,6 +760,116 @@ export const aiChatStream = async (payload, onDelta, opts = {}) => {
   }
   return full
 }
+/**
+ * 智能体流式（"深度思考"）：帧是**完整事件对象**，逐帧交给 onEvent；
+ * 返回值是 done 帧里的 result（一次性接口同一份结构）。
+ *
+ * 帧类型：
+ *   {t:'round', round, maxRounds}            新一轮开始
+ *   {t:'delta', d}                           模型正在说的话（逐字）
+ *   {t:'round_end', round, calls, thought}   这一轮说完就去调工具了 ⇒ 刚才那段是思考不是结论
+ *   {t:'step_start', round, tool, args}      开始执行某个工具
+ *   {t:'step', step}                         工具执行完（ok / durationMs / result 摘要）
+ *   {t:'change', change}                     产出一张待确认的变更单
+ *   {t:'done', result}                       全部结束（result 与 /api/ai/agent 的响应同形）
+ *   {t:'error', error}
+ */
+const agentSse = async (url, payload, onEvent, opts = {}) => {
+  const idleMs = opts.idleMs || 120000
+  const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null
+  const external = opts.signal || null
+  let userAborted = false
+  const onExternalAbort = () => {
+    userAborted = true
+    if (ctrl) ctrl.abort()
+  }
+  if (external) {
+    if (external.aborted) onExternalAbort()
+    else external.addEventListener('abort', onExternalAbort, { once: true })
+  }
+  let idleTimer = null
+  const arm = () => {
+    if (!ctrl) return
+    clearTimeout(idleTimer)
+    idleTimer = setTimeout(() => ctrl.abort(), idleMs)
+  }
+  arm()
+  let res
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: localToken
+        ? { 'Content-Type': 'application/json', 'X-上游-Token': localToken }
+        : { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...payload,
+        lang: String(locale.value || '').toLowerCase().startsWith('en') ? 'en' : 'zh'
+      }),
+      signal: ctrl ? ctrl.signal : undefined
+    })
+  } catch (e) {
+    clearTimeout(idleTimer)
+    if (external) external.removeEventListener('abort', onExternalAbort)
+    throw new Error(userAborted ? t('api.generationStopped') : t('api.idleTimeout', { s: Math.round(idleMs / 1000) }))
+  }
+  if (!res.ok) {
+    clearTimeout(idleTimer)
+    if (external) external.removeEventListener('abort', onExternalAbort)
+    let detail = 'HTTP ' + res.status
+    try {
+      const body = await res.json()
+      if (body && body.message) detail = body.message
+    } catch { /* 非 JSON 保留状态码 */ }
+    throw new Error(detail)
+  }
+  if (!res.body) { clearTimeout(idleTimer); throw new Error(t('api.noStream')) }
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder('utf-8')
+  let buf = ''
+  let result = null
+  let errMsg = ''
+  try {
+    for (;;) {
+      let chunkRes
+      try {
+        chunkRes = await reader.read()
+      } catch (e) {
+        throw new Error(userAborted ? t('api.generationStopped') : t('api.interruptedTimeout', { s: Math.round(idleMs / 1000) }))
+      }
+      const { done, value } = chunkRes
+      if (done) break
+      arm()
+      buf += decoder.decode(value, { stream: true })
+      let idx
+      while ((idx = buf.indexOf('\n\n')) >= 0) {
+        const chunk = buf.slice(0, idx)
+        buf = buf.slice(idx + 2)
+        for (const line of chunk.split('\n')) {
+          if (!line.startsWith('data:')) continue
+          const raw = line.slice(5).trim()
+          if (!raw) continue
+          let obj
+          try { obj = JSON.parse(raw) } catch { continue }
+          if (!obj) continue
+          if (obj.t === 'done') result = obj.result
+          if (obj.t === 'error') errMsg = obj.error || '未知错误'
+          if (typeof onEvent === 'function') onEvent(obj)
+        }
+      }
+    }
+  } finally {
+    clearTimeout(idleTimer)
+    if (external) external.removeEventListener('abort', onExternalAbort)
+  }
+  if (errMsg) throw new Error(errMsg)
+  return result
+}
+
+// 深度思考（智能体）流式：思考/工具/变更单边走边到
+export const aiAgentStream = (payload, onEvent, opts = {}) => agentSse('/api/ai/agent/stream', payload, onEvent, opts)
+// 审批后继续（接上次那段任务往下跑），同样是流式
+export const aiJobResumeStream = (jobId, payload, onEvent, opts = {}) => agentSse(`/api/ai/jobs/${jobId}/resume/stream`, payload, onEvent, opts)
+
 // AI 数据字典：返回 { content, tableCount }
 export const aiDataDict = (payload, opts = {}) => http.post('/api/ai/datadict', payload, { signal: opts.signal }).then(r => r.data)
 // AI 结果导出为文件：payload = { title, markdown, format: md|docx|xlsx|pdf, fileName }，返回文件流（Blob）
@@ -812,6 +922,10 @@ export const aiAgentRun = (payload, opts = {}) => http.post('/api/ai/agent', pay
 export const aiThreadList = () => http.get('/api/ai/threads').then(r => r.data)
 export const aiThreadGet = (id) => http.get('/api/ai/threads/' + encodeURIComponent(id)).then(r => r.data)
 export const aiThreadDelete = (id) => http.delete('/api/ai/threads/' + encodeURIComponent(id)).then(r => r.data)
+// 剪掉会话里的旧问答：编辑某条提问后重新作答，这条之后的就作废了（刷新别又整段回来）。
+// 传 beforeId（这条消息的 id）最准；只有拿不到 id 时才退化成 keep（条数）。
+export const aiThreadTrim = (id, opts = {}) =>
+  http.post('/api/ai/threads/' + encodeURIComponent(id) + '/trim', opts).then(r => r.data)
 // 重命名：后端 POST /threads 是 upsert（带 id 就更新标题），不需要单独的改名接口
 export const aiThreadRename = (id, title) => http.post('/api/ai/threads', { id, title }).then(r => r.data)
 

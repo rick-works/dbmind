@@ -1419,8 +1419,8 @@ html .el-button.is-text.dc-del.is-disabled { color: var(--dc-text-dim); opacity:
 .ai-markdown > :last-child { margin-bottom: 0; }
 .ai-markdown pre {
   background: var(--dc-bg-soft); border: 1px solid var(--dc-border-soft);
-  border-radius: 8px; padding: 11px 14px; overflow-x: auto; margin: 10px 0;
-  line-height: 1.65;
+  border-radius: 10px; padding: 12px 14px; overflow-x: auto; margin: .8em 0;
+  line-height: 1.7; font-size: 12.5px;
 }
 /* SQL 代码块：每段右上角自带「插入编辑器 / 复制」图标按钮，多段 SQL 可各自使用 */
 .ai-markdown .md-code { position: relative; }
@@ -1450,27 +1450,59 @@ html .el-button.is-text.dc-del.is-disabled { color: var(--dc-text-dim); opacity:
   border: 1px solid var(--dc-border-soft);
   border-radius: 5px; padding: 1px 5px;
 }
-.ai-markdown p { margin: 8px 0; }
-.ai-markdown ul, .ai-markdown ol { padding-left: 20px; margin: 8px 0; }
-.ai-markdown li { margin: 4px 0; }
+/* 段落与列表：AI 的回答几乎全是「一段结论 + 几条依据」，
+   段落间距要能看出层次、列表缩进要够，否则整块糊成一坨（用户反馈排版闷）。 */
+.ai-markdown p { margin: .62em 0; }
+.ai-markdown p + ul, .ai-markdown p + ol { margin-top: .35em; }
+.ai-markdown ul, .ai-markdown ol { padding-left: 1.45em; margin: .55em 0; }
+.ai-markdown li { margin: .3em 0; padding-left: .1em; }
+.ai-markdown li > ul, .ai-markdown li > ol { margin: .25em 0 .1em; }
 .ai-markdown ul > li { list-style: disc; }
 .ai-markdown ol > li { list-style: decimal; }
+.ai-markdown li::marker { color: var(--dc-text-dim); }
 .ai-markdown h1, .ai-markdown h2, .ai-markdown h3,
 .ai-markdown h4, .ai-markdown h5, .ai-markdown h6 {
-  margin: 12px 0 6px; color: var(--dc-text-strong); font-weight: 700; line-height: 1.4;
+  margin: 1.1em 0 .4em; color: var(--dc-text-strong); font-weight: 700; line-height: 1.45;
+  letter-spacing: .1px;
 }
-.ai-markdown h1, .ai-markdown h2 { font-size: 15px; }
-.ai-markdown h3 { font-size: 14px; }
+.ai-markdown h1 { font-size: 17px; }
+.ai-markdown h2 { font-size: 16px; }
+.ai-markdown h3 { font-size: 15px; }
 .ai-markdown h4, .ai-markdown h5, .ai-markdown h6 { font-size: 14px; }
+/* 标题后面跟段落：别再多出一截空白 */
+.ai-markdown h1 + p, .ai-markdown h2 + p, .ai-markdown h3 + p { margin-top: .2em; }
+/* 步骤标题（h3 / h4）：只放大字号、拉开间距，不画任何竖条 ——
+   步骤已经是各自独立的圆角块了（见 AiPanel 的 .tl-step），再加竖线反而脏。 */
+.ai-markdown h3, .ai-markdown h4 { margin: .8em 0 .3em; }
+/* 模型更常写 `**① 看清表结构**` 这种「整段只有一个加粗」当步骤标题 */
+.ai-markdown p:has(> strong:only-child) {
+  margin: 1.05em 0 .35em;
+  line-height: 1.5;
+}
+.ai-markdown p:has(> strong:only-child) > strong { font-size: 14px; }
+.ai-markdown hr { opacity: .7; }
 /* 加粗只做字重强调，不再染成绿色（绿色在浅色底上偏跳，影响整体协调） */
 .ai-markdown strong { color: var(--dc-text-strong); font-weight: 700; }
 .ai-markdown em { font-style: italic; }
 .ai-markdown a { color: var(--dc-link); text-decoration: underline; text-underline-offset: 2px; }
 .ai-markdown a:hover { color: var(--dc-primary); }
+/* 提示卡：`> 风险：…` / `> 注意：…` / `> 结论：…` / `> 下一步：…`
+   （utils/markdown 按首词打 is-risk / is-warn / is-ok / is-next）——
+   一种灰底的引用分不出「这是警告还是结论」，深度思考里风险必须一眼看见。
+   2026-11-19：用户要求「竖条都不要」——左侧那条 3px 竖线全部去掉，
+   改成整块淡底 + 四角圆角，语气差异只靠底色与加粗文字承担。 */
+.ai-markdown blockquote.md-callout { padding: 9px 12px; }
+.ai-markdown blockquote.is-risk { background: rgba(214, 69, 69, .12); }
+.ai-markdown blockquote.is-risk strong { color: var(--dc-danger, #d64545); }
+.ai-markdown blockquote.is-warn { background: rgba(209, 154, 0, .13); }
+.ai-markdown blockquote.is-warn strong { color: #b8860b; }
+.ai-markdown blockquote.is-ok { background: rgba(46, 158, 107, .11); }
+.ai-markdown blockquote.is-ok strong { color: #2e9e6b; }
+.ai-markdown blockquote.is-next { background: var(--dc-primary-wash); }
 .ai-markdown blockquote {
-  margin: 10px 0; padding: 8px 12px;
-  border-left: 3px solid var(--dc-primary);
-  background: var(--dc-primary-wash); border-radius: 0 8px 8px 0;
+  margin: 10px 0; padding: 9px 12px;
+  border: none; border-left: 0;
+  background: var(--dc-primary-wash); border-radius: 8px;
   color: var(--dc-text-mid);
 }
 .ai-markdown blockquote > :first-child { margin-top: 0; }

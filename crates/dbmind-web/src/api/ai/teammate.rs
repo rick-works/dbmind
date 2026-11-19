@@ -130,6 +130,9 @@ pub async fn thread_get(State(_state): State<AppState>, Path(id): Path<String>) 
         .into_iter()
         .map(|row| {
             json!({
+                // 消息 id：前端「编辑第 N 句重新作答」要按它精确剪掉后面的问答
+                // （按「第几条」剪很危险：前端只显示最近 200 条 / 也可能过滤过，索引对不上会多删）
+                "id": row.id,
                 "role": row.role,
                 "content": row.content,
                 "usage": if row.usage.is_empty() { Value::Null } else {
@@ -154,6 +157,32 @@ pub async fn thread_get(State(_state): State<AppState>, Path(id): Path<String>) 
 pub async fn thread_delete(State(_state): State<AppState>, Path(id): Path<String>) -> XResult<Json<Value>> {
     store()?.ai_thread_delete(&id)?;
     Ok(Json(json!({ "success": true })))
+}
+
+/// `POST /api/ai/threads/{id}/trim` —— 只留前 `keep` 条消息（编辑提问后重新作答）。
+///
+/// <p>消息是追加式的：用户改了第 N 句重新问，第 N 句之后的问答就作废了。
+/// 不同步删服务端的话，刷新/重开看到的是「旧的整段历史」，改等于没改。
+pub async fn thread_trim(
+    State(_state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> XResult<Json<Value>> {
+    let store = store()?;
+    if store.ai_thread_get(&id)?.is_none() {
+        return Err(XError::bad_request("会话不存在"));
+    }
+    // 优先按消息 id 剪（精确）：前端改了哪一条，就把它和它之后的全部删掉
+    if let Some(from) = body.get("beforeId").and_then(Value::as_i64) {
+        let deleted = store.ai_message_trim_from(&id, from)?;
+        return Ok(Json(json!({ "success": true, "deleted": deleted })));
+    }
+    let keep = body
+        .get("keep")
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as usize;
+    let deleted = store.ai_message_trim(&id, keep)?;
+    Ok(Json(json!({ "success": true, "deleted": deleted })))
 }
 
 // ------------------------------------------------------------------ 对话落库

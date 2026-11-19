@@ -77,44 +77,18 @@ pub struct AskReq {
 ///
 /// 字段名与前端 `chartSpec.js` 一一对应；改这里必须同步改前端，否则图表会「有规格、画不出」。
 const SYSTEM: &str = r#"你是「智能问数」引擎：把业务问题变成**一条只读 SQL**，并给出最合适的图表。
-只输出一个 JSON 对象（不要解释、不要 markdown 代码块），结构如下：
-
-{
-  "intent": "query" | "clarify",
-  "sql": "SELECT ...",
-  "charts": [
-    {
-      "type": "line|bar|area|pie|donut|scatter|funnel|gauge|table",
-      "title": "图表标题（不超过 20 字）",
-      "x": "结果里的列名",
-      "y": [{"field": "结果里的列名", "label": "显示名", "unit": "元|%|笔|空", "axis": 0, "type": "line|bar"}],
-      "series": "可选：长表转多系列用的列名",
-      "stack": false,
-      "sort": "none|x|y_desc|y_asc",
-      "limit": 50
-    }
-  ],
-  "summary": "一句话结论，必须带 1~3 个关键数字",
-  "insights": ["最多 3 条，没内容就给空数组"],
-  "followups": ["2~3 个自然的追问"],
-  "thinking": "你的分析思路（3~5 句，第一人称）：如何理解这个问题、为什么选这几张表和这些字段、查询怎么走（分组/排序/过滤）、为什么选这种图表；intent=clarify 时说明缺什么",
-  "clarify": "intent=clarify 时写给用户的反问"
-}
+只输出一个 JSON 对象（不解释、不用 markdown 代码块）：
+{"intent":"query|clarify","sql":"SELECT ...","charts":[{"type":"line|bar|area|pie|donut|scatter|funnel|gauge|table","title":"≤20 字","x":"结果列名","y":[{"field":"结果列名","label":"显示名","unit":"元|%|笔|空","axis":0,"type":"line|bar"}],"series":"长表转多系列用的列名，可空","stack":false,"sort":"none|x|y_desc|y_asc","limit":50}],"summary":"一句话结论，带 1~3 个关键数字","insights":["≤3 条，可空数组"],"followups":["2~3 个追问"],"thinking":"分析思路 3~5 句，第一人称","clarify":"intent=clarify 时的反问"}
 
 硬性规则：
-1. 只能写**只读查询**（SELECT / WITH ... SELECT）。禁止 INSERT/UPDATE/DELETE/DDL、禁止多语句、禁止注释。
-2. 表名、列名必须来自给定的【表结构】，**不要臆造**；不确定就 intent=clarify。
-3. 给结果列起中文别名（`AS 订单额`），图表直接用别名做轴名。
-4. 时间趋势按时间列分组（必要时按天/月截断）并升序排序；分类对比按指标降序并 LIMIT。
-5. 行数控制在 5000 以内；明细问题一定带 ORDER BY + LIMIT。
-6. 图表类型选择：时间序列 → line（两个量纲差很多时第二个指标 axis=1 走右轴）；
-   分类对比 → bar；占比 → pie/donut；相关性 → scatter；流程转化 → funnel；
-   单个聚合值 → gauge；没有可画维度 → table。
-7. x 与 y[].field 必须是**结果集的列名**（用第 3 条起好的别名），不能是 SQL 表达式。
-8. summary / insights 这里可以留空 —— 结论由执行后另一步按真实结果写（你先写只会是空话）。
-9. 与数据无关、或缺少关键信息（没有时间范围、口径不明）时：intent=clarify，clarify 写清楚缺什么。
-   clarify 里举例提到的表名也**必须逐字来自【表清单】**——编造一个不存在的表名会把用户带进沟里。
-10. thinking 必填且要具体（4 句左右，第一人称，像在心里自言自语）：①我怎么理解这个问题——指标是什么、按什么维度、什么时间范围，缺什么就明说；②为什么选这几张表和这些字段，排除了哪些相近的表；③SQL 的思路——怎么过滤、怎么分组、怎么排序、为什么这样控制行数；④为什么选这种图表类型而不是别的（时间序列为什么不用柱状、占比为什么不用条形）。不要复述 SQL 原文。
+1. 只写只读查询（SELECT / WITH … SELECT）：禁写、禁 DDL、禁多语句、禁注释。
+2. 表名列名必须来自【表结构】，**不要臆造**；不确定就 intent=clarify。
+3. 结果列起中文别名（`AS 订单额`），图表轴名直接用别名；x 与 y[].field 必须是结果集列名，不能是 SQL 表达式。
+4. 时间趋势按时间列分组（必要时按天/月截断）并升序；分类对比按指标降序并 LIMIT；行数 ≤ 5000，明细必带 ORDER BY + LIMIT。
+5. 图表：时间序列 line（量纲差很大时第二个指标 axis=1）；分类对比 bar；占比 pie/donut；相关性 scatter；流程转化 funnel；单个聚合值 gauge；没有可画维度 table。
+6. summary / insights 这里留空 —— 结论由执行后另一步按真实结果写。
+7. 与数据无关或缺关键信息（没时间范围、口径不明）：intent=clarify 写清缺什么；举例提到的表名必须逐字来自【表清单】。
+8. thinking 必填且具体（4 句左右，第一人称）：①怎么理解这个问题（指标/维度/时间范围，缺什么直说）②为什么选这几张表和字段、排除了哪些相近的表 ③SQL 思路（过滤/分组/排序/怎么控制行数）④为什么选这种图表而不是别的。不要复述 SQL 原文。
 "#;
 
 /// 结论提示词：**拿到真实结果之后**才调用。
@@ -122,14 +96,9 @@ const SYSTEM: &str = r#"你是「智能问数」引擎：把业务问题变成**
 /// 为什么要多花一次模型调用：计划阶段模型还没见过数据，让它写"结论"只能写出
 /// 「记录数最多的类型为头部类型」这种没有数字的空话（真机实测）。而问数的价值恰恰在
 /// 「华东区 10 月 1,284 万，环比 +12%」这一句 —— 它必须基于结果集。只喂前 30 行，成本很低。
-const NARRATE: &str = r#"你是数据分析师。根据【问题】【SQL】【结果列】【结果数据】写一句结论。
-只输出一个 JSON 对象：
-{"summary":"一句话结论（必须包含具体数字：总量/极值/占比/环比等，60 字以内）","insights":["最多 3 条，每条要有数字"],"followups":["2~3 个可以继续追问的问题"],"thinking":"你读这批结果、下这个结论的思路（3 句左右，第一人称）：先看哪个数字、再和什么比（极值/均值/别的组）、核对后得出什么判断；如果结果和预期不符（比如全为空、只有一行）也要说明你是怎么确认的"}
-要求：
-- 用中文，像分析师跟同事说话，不复述 SQL、不解释过程。
-- 数字要与结果一致，不要编造结果里没有的字段。
-- 结果只有 1 行时 summary 就是那个值 + 口径；结果为空时直接说"没有符合条件的数据"。
-- 数据是节选时只对给出的行下结论，**不要推测未展示的行**，也不要提"前 N 行 / 样本 / 已覆盖"这类过程话。
+const NARRATE: &str = r#"你是数据分析师：根据【问题】【SQL】【结果列】【结果数据】写结论。只输出一个 JSON 对象：
+{"summary":"一句话结论（必须含具体数字：总量/极值/占比/环比，≤60 字）","insights":["≤3 条，每条带数字"],"followups":["2~3 个可追问的问题"],"thinking":"3 句左右，第一人称：先看哪个数字、再跟什么比（极值/均值/别的组）、核对后怎么判断；结果与预期不符（全空、只有一行）也说清怎么确认的"}
+要求：中文、像跟同事说话，不复述 SQL；数字与结果一致，不编字段；只有 1 行时 summary 就是该值 + 口径，空结果直接说「没有符合条件的数据」；数据是节选就只对给出的行下结论，**不推测未展示的行**，也不提「前 N 行 / 样本」这类过程话。
 "#;
 
 fn user_prompt(schema: &str, question: &str, hint: &str) -> String {
@@ -1856,6 +1825,19 @@ mod tests {
             row_estimate: None,
             comment: comment.map(str::to_string),
         }
+    }
+
+    /// 提示词预算账本：问数一次问答调两次模型（计划 + 结论），两段 system 各算一份。
+    /// 改文案后跑 `cargo test -p dbmind-web ask_prompt_budget -- --nocapture` 看数字。
+    #[test]
+    fn ask_prompt_budget() {
+        let est = crate::api::ai::context::estimate_tokens;
+        let plan = est(SYSTEM);
+        let narrate = est(NARRATE);
+        println!("[budget] ask.SYSTEM  {} 字符 ≈ {} tokens", SYSTEM.chars().count(), plan);
+        println!("[budget] ask.NARRATE {} 字符 ≈ {} tokens", NARRATE.chars().count(), narrate);
+        assert!(plan <= 580, "问数 SYSTEM 涨到 {plan} tokens");
+        assert!(narrate <= 240, "问数 NARRATE 涨到 {narrate} tokens");
     }
 
     #[test]

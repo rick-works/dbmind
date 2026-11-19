@@ -36,7 +36,10 @@
 
 use std::time::Instant;
 
+use axum::body::Body;
 use axum::extract::State;
+use axum::http::{header, StatusCode};
+use axum::response::{IntoResponse, Response};
 use axum::Json;
 use dbmind_core::{is_read_only, AccessContext, AiJobRow, QueryOptions, QueryRequest};
 use serde::Deserialize;
@@ -50,9 +53,10 @@ use crate::api::error::{XError, XResult};
 use crate::api::shape;
 use crate::AppState;
 
-/// 默认轮数上限。6 轮足够「看表 → 看结构 → 试一条 → 再修一条 → 总结」，
-/// 再多基本就是模型在绕圈。
-const DEFAULT_ROUNDS: u32 = 6;
+/// 默认轮数上限。按步骤做（看表 → 看结构 → 证据 → 给建议 → 出单）
+/// 每步都可能要 1~2 次查询，6 轮会刚好卡在「还没下结论」上，给到 8；
+/// 再多基本就是模型在绕圈（用尽时还会强制要一次结论，见 run_loop 末尾）。
+const DEFAULT_ROUNDS: u32 = 8;
 const MAX_ROUNDS: u32 = 12;
 /// 单次工具结果回灌给模型的最大字符数。
 ///
@@ -84,9 +88,29 @@ pub struct AgentReq {
     /// 会话 id（可选）：变更单会挂到这个会话下，审计时能顺藤摸瓜找到当时的对话
     #[serde(default)]
     pub thread_id: Option<String>,
+    /// 没有 thread_id 时是否新建会话（与 `chat` 同名字段同义）。
+    /// 智能体以前完全不落会话，聊完切走/刷新，左栏「记录」里就什么都没有。
+    #[serde(default)]
+    pub persist: bool,
     /// 界面语言（`en` / `zh`）：英文界面下智能体的回答与变更单说明也用英文
     #[serde(default)]
     pub lang: Option<String>,
+    /// 聚焦表（界面底栏勾选的表）：**用户显式限定候选**。
+    ///
+    /// <p>以前这里根本没接收（serde 把未知字段丢掉），于是「用户重新选了表」对智能体
+    /// 完全不可见 —— 它只能从历史和表清单里猜，继续操作上一轮那张表（真机反馈）。
+    #[serde(default)]
+    pub tables: Vec<String>,
+    /// 知识库范围（与 `chat` 同义）：null = 全部库、[] = 本次不注入、[...] = 指定库。
+    ///
+    /// <p>深度思考以前完全不接这个字段 —— 底栏选了「全部资料库」它照样不查，
+    /// 选项摆在那儿等于没接（用户要求「底栏每个选项都要生效」）。
+    #[serde(default)]
+    pub kb_ids: Option<Value>,
+    /// 对话里选中的插件技能 id：提示词拼进 system（与 `chat` 同一套 augment_system）。
+    /// 选着技能切到深度思考，技能不能凭空失效。
+    #[serde(default)]
+    pub plugin_skills: Vec<String>,
     /// 之前的对话轮次（`[{role, content}]`）。
     ///
     /// **智能体以前完全不收历史**：用户说「继续」它只能回答「上次的上下文我这边没有」，
@@ -110,84 +134,112 @@ impl AgentReq {
 }
 
 ///
-/// 说明文字刻意压到一行：这份 schema 跟着**每一轮**请求走（默认 6 轮 = 白付 6 次），
-/// 而模型只需要知道「什么情况下该调、参数是什么」。删掉的是举例与客套，语义一条没少。
+/// 说明文字压到一行：这份 schema 跟着**每一轮**请求走（默认最多 8 轮 = 白付 8 次），
+/// 模型只需要知道「什么情况调、参数是什么」。删掉的是举例与客套，语义一条没少。
 fn tool_defs() -> Value {
     json!([
         { "type": "function", "function": {
             "name": "list_tables",
-            "description": "列出当前库的表与视图（可按关键字过滤）。不确定有什么表时先调。",
+            "description": "列出表/视图（可按关键字过滤）。不确定有哪些表时先调。",
             "parameters": { "type": "object", "properties": {
-                "keyword": { "type": "string", "description": "表名关键字，可空" } }, "required": [] }
+                "keyword": { "type": "string", "description": "关键字，可空" } }, "required": [] }
         }},
         { "type": "function", "function": {
             "name": "describe_table",
-            "description": "看一张表的字段（名/类型/可空/主键）。写 SQL 前先调。",
+            "description": "看表的字段与主键。写 SQL 前先调。",
             "parameters": { "type": "object", "properties": {
                 "table": { "type": "string", "description": "表名" } }, "required": ["table"] }
         }},
         { "type": "function", "function": {
             "name": "run_readonly_sql",
-            "description": "跑一条只读 SQL，最多回 100 行；select/show/explain/desc 之外的语句会被拒。",
+            "description": "跑只读 SQL，最多回 100 行；select/show/explain/desc 之外会被拒。",
             "parameters": { "type": "object", "properties": {
                 "sql": { "type": "string", "description": "只读 SQL" } }, "required": ["sql"] }
         }},
         { "type": "function", "function": {
             "name": "patrol_tables",
-            "description": "结构巡检：无主键/过度可空/超长文本。纯规则不耗 token，问「这库有什么问题」先调。",
+            "description": "结构巡检（无主键/过度可空/超长文本），纯规则不耗 token。问「库有什么问题」先调。",
             "parameters": { "type": "object", "properties": {}, "required": [] }
         }},
         { "type": "function", "function": {
             "name": "suggest_indexes",
-            "description": "给主键/索引建议，附可执行 DDL 与理由（只读规则，不改库）。table 留空扫整库。",
+            "description": "给主键/索引建议 + 可执行 DDL（只读，不改库）。table 留空扫整库。",
             "parameters": { "type": "object", "properties": {
-                "table": { "type": "string", "description": "只看这一张表，可空" } }, "required": [] }
+                "table": { "type": "string", "description": "只看这张表，可空" } }, "required": [] }
         }},
         { "type": "function", "function": {
             "name": "sync_status",
-            "description": "最近的同步任务状态（进度/失败行数/原因）。",
+            "description": "最近的同步任务（进度/失败行数/原因）。",
             "parameters": { "type": "object", "properties": {}, "required": [] }
         }},
         { "type": "function", "function": {
             "name": "backup_status",
-            "description": "最近的备份/还原任务状态（成败/产物/耗时）。",
+            "description": "最近的备份/还原任务（成败/产物/耗时）。",
             "parameters": { "type": "object", "properties": {}, "required": [] }
         }},
         { "type": "function", "function": {
             "name": "propose_change",
-            "description": "把一条 SQL 变成待用户确认的变更单（本工具不执行）。改数据/改结构必须先调它，返回单号、风险等级、撤销语句。",
+            "description": "把 SQL 变成待确认的变更单（不执行）。改数据/改结构必须先调；返回单号、风险等级、撤销语句；同一句 SQL 重复提返回已有单号。",
             "parameters": { "type": "object", "properties": {
                 "sql": { "type": "string", "description": "单条 SQL" },
-                "title": { "type": "string", "description": "一句话说明做什么" },
-                "reason": { "type": "string", "description": "依据（来自哪次查询）" } }, "required": ["sql"] }
+                "title": { "type": "string", "description": "做什么" },
+                "reason": { "type": "string", "description": "依据" } }, "required": ["sql"] }
         }}
     ])
 }
 
-fn system_prompt(kind: &str, database: &str, table_hint: &str) -> String {
+fn system_prompt(kind: &str, database: &str, table_hint: &str, focus: &[String]) -> String {
     let db = if database.trim().is_empty() {
         "连接默认库".to_string()
     } else {
         database.to_string()
     };
+    // 聚焦表 = 用户显式限定：只说这是候选、其余「不提供」是不够的 ——
+    // 智能体会从历史与表清单里挑别的表接着做（用户：「我表都重新选了，它还在操作旧表」）。
+    // 所以这里写成硬约束，并要求换表前先问。
+    // 文案口径：这份 system 跟着**每一轮**请求走（默认最多 8 轮），
+    // 所以只留「必须遵守的约束」，删掉解释性的重复与举例（语义一条不少）。
+    let focus_note = if focus.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "【聚焦表】只用：{}。历史里出现过的其它表一律不用；需要别的表先问用户。\n",
+            focus.join("、")
+        )
+    };
     format!(
-        "你是数据库智能体，靠工具「看」真实库来回答。\n\
-         连接类型：{kind}；当前库：{db}。\n\
-         {table_hint}\n\
+        "你是数据库智能体：先看真实库，再回答。连接类型：{kind}；当前库：{db}。\n\
+         {focus_note}{table_hint}\n\
          规则：\n\
-         1. 先用 list_tables / describe_table 看清表和字段再写 SQL，不猜表名列名；\n\
-         2. 查询用 run_readonly_sql（写/改/删会被拒）；**任何改数据或改结构的想法，\n\
-            一律交给 propose_change 生成待确认的变更单**，绝不自己执行，也不要只把 SQL\n\
-            写在回答里让用户自己贴（那样就没有风险分级、撤销语句和审计记录了）；\n\
-         3. 问「库里有什么问题 / 哪张表慢」：先 patrol_tables 和 suggest_indexes，\n\
-            再针对可疑表跑几条 SQL 拿证据，最后把值得做的改动写成变更单；\n\
-         4. 问同步 / 备份情况：同步用 sync_status，备份用 backup_status，别猜；\n\
-         5. SQL 贴合上面的方言；结果被截断就加 where / limit 再查；\n\
-         6. 结论只来自工具返回的数据，**不编数字**，查不到就说查不到；\n\
-         7. 中文、简短：先结论，再列证据，最后说要做什么（已生成的变更单 id 一并给出）；\n\
-         8. 上面若有对话历史，**接着历史里的结论做**：用户说「继续 / 然后呢 / 就按这个来」\n\
-             就沿最近一条结论往下推进，不重头再体检一遍，也绝不说「我没有上文」；\n\
-             确实分不清指哪件事时，按最近一条结论先做一步，再问一句确认。"
+         1. 写 SQL 前先 list_tables / describe_table 看清表和字段，不猜表名列名。\n\
+         2. 取数用 run_readonly_sql（写/改/删会被拒）；**改数据或改结构一律走 propose_change\n\
+            出待确认变更单**，绝不自己执行，也不要把 SQL 甩给用户自己贴\n\
+            （那样没有风险分级、撤销语句和审计记录）。\n\
+         3. 问「库里有什么问题 / 哪张表慢」：先 patrol_tables、suggest_indexes，\n\
+            再跑几条 SQL 拿证据，最后把值得做的改动出成变更单。\n\
+         4. 同步看 sync_status，备份看 backup_status，别猜。\n\
+         5. SQL 用上面的方言；结果被截断就加 where / limit 再查。\n\
+         6. 结论只来自工具返回的数据，**不编数字**，查不到就说查不到。\n\
+         7. 按步骤讲清这件事怎么做的（顺序随问题，不套模板）。**一步做一步说**：\n\
+            先写这一步的加粗小标题（**① 看清表结构**，编号从 ① 连续）和要查什么，\n\
+            再调这一步的 1~2 个工具，看到结果先写结论（关键数字 / 哪几列 / 判断），再进下一步；\n\
+            别一口气跑完所有工具最后再补报告。工具结果回来后直接接着写，别重复刚写过的标题。\n\
+         8. **不重复**：工具原文、变更单里的 SQL / 依据 / 风险 / 撤销，界面已经显示，\n\
+            回答里不再抄；同一件事只说一次，只讲「为什么这么做、看到了什么、结论是什么」。\n\
+         9. 要改数据 / 改结构：先 propose_change，再写「这一步要你点『允许』，批准后我接着做」，\n\
+            然后停下等确认；批准续跑后从这一步往下做，不从头上再查一遍。\n\
+         10. 结尾给结论与下一步（不超过 3 条）。\n\
+         11. 有对话历史就接着最近一条结论做，不说「我没有上文」；确实分不清就先按最近结论做一步，再问一句确认。\n\
+         \n\
+         格式（按内容选，不要一律大段文字）：几行几列的数据（字段清单 / 统计 / 对比 / 候选索引）\n\
+         用 markdown 表格；SQL / DDL 放围栏代码块，一条一块；步骤标题一行加粗；\n\
+         风险 / 注意 / 结论 / 下一步用引用块起头「> 风险：…」（界面渲染成彩色提示卡）；\n\
+         验证写成「**验证**：…」+ 关键数字，别只说「已验证」。\n\
+         只有 propose_change 真的返回成功才说「变更单已生成」；返回已有单号就说\n\
+         「这张单之前提过（单号 …），可直接在卡片上点允许」，不再复述 SQL / 依据。\n\
+         \n\
+         节奏：每步 1~2 次查询，整件事 3~6 步；能下结论就停，别为「步骤完整」反复查同一张表；\n\
+         轮次快用完先给结论，没查到的直接说没查到。"
     )
 }
 
@@ -302,6 +354,7 @@ async fn execute_tool(
     name: &str,
     args: &Value,
     changes: &mut Vec<Value>,
+    emit: Option<&Emit>,
 ) -> (bool, String) {
     match name {
         "list_tables" => {
@@ -442,14 +495,18 @@ async fn execute_tool(
             .await
             {
                 Ok((id, risk, undo)) => {
-                    changes.push(json!({
+                    let change = json!({
                         "id": id,
                         "title": if title.trim().is_empty() { "AI 建议的变更" } else { title.trim() },
                         "sql": sql,
                         "risk": risk,
                         "undoSql": undo,
                         "status": "pending",
-                    }));
+                    });
+                    // 变更单一生成就推给前端：用户能在它「说话」的同时就看到审批卡片，
+                    // 而不是等整轮跑完
+                    emit_event(emit, json!({ "t": "change", "change": change.clone() }));
+                    changes.push(change);
                     let reversible = if undo.is_some() {
                         "有撤销语句，执行后可以撤销。"
                     } else {
@@ -480,6 +537,12 @@ struct LoopOutcome {
     answer: String,
     rounds: u32,
     stopped: String,
+    /// 每轮「说了话又去调工具」的那段叙述（`{ round, text }`）。
+    /// 落进 message.meta.texts：刷新/重开记录时按「步骤文字 → 该步的工具」重建时间线，
+    /// 否则工具会被整堆到最前面（用户反馈「刷新以后位置变了」）。
+    texts: Vec<Value>,
+    /// 整个循环的 token 用量（各轮相加；上游一个都没给就是 None）
+    usage: Option<config::TokenUsage>,
 }
 
 /// 落一次 checkpoint：状态 + 已走步骤 + 当前答案。
@@ -505,6 +568,19 @@ fn checkpoint_job(job_id: &str, status: &str, steps: &[Value], result: &str) {
 ///
 /// 参数多是因为它就是在操作一套运行态（消息、步骤、变更单、预算）；
 /// 拆成结构体只会让调用点多一层包装，读起来更绕。
+/// SSE 帧通道：`Some` = 流式接口（每走一步推一帧给前端），`None` = 老的一次性接口。
+///
+/// 元素是 `Result<String, io::Error>`（不是裸 String）：`Body::from_stream` 要的正是
+/// 这个形状，省掉一层再包装。
+type Emit = tokio::sync::mpsc::UnboundedSender<Result<String, std::io::Error>>;
+
+/// 推一帧（`data:{json}\n\n`，与 chat/stream 同一套帧格式）。
+fn emit_event(emit: Option<&Emit>, payload: Value) {
+    if let Some(tx) = emit {
+        let _ = tx.send(Ok(format!("data:{payload}\n\n")));
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_loop(
     state: &AppState,
@@ -519,19 +595,44 @@ async fn run_loop(
     changes: &mut Vec<Value>,
     max_rounds: u32,
     job_id: &str,
+    emit: Option<&Emit>,
 ) -> XResult<LoopOutcome> {
     let mut answer = String::new();
     let mut rounds_used = 0u32;
     let mut stopped = "finished";
+    let mut texts: Vec<Value> = Vec::new();
+    let mut usage_sum: Option<config::TokenUsage> = None;
 
     for round in 1..=max_rounds {
         rounds_used = round;
+        emit_event(
+            emit,
+            json!({ "t": "round", "round": round, "maxRounds": max_rounds }),
+        );
         let model_call = model.clone();
         let system_call = system.to_string();
         let messages_call = messages.clone();
-        // 同步 HTTP 在 blocking 线程池里跑：tokio 的工作线程不能被一次模型调用占住
-        let message = match run_blocking(move || {
-            config::chat_tools(&model_call, &system_call, &messages_call, &tool_defs())
+        let emit_call = emit.cloned();
+        // 同步 HTTP 在 blocking 线程池里跑：tokio 的工作线程不能被一次模型调用占住。
+        // 流式接口用 chat_tools_stream：模型的每段话边说边推给前端（"深度思考"的过程感
+        // 就靠这个），工具调用的参数照样在流末尾拼齐。
+        let message = match run_blocking(move || match &emit_call {
+            Some(tx) => {
+                let frames = tx.clone();
+                config::chat_tools_stream(
+                    &model_call,
+                    &system_call,
+                    &messages_call,
+                    &tool_defs(),
+                    |delta| {
+                        let _ = frames.send(Ok(format!(
+                            "data:{}\n\n",
+                            json!({ "t": "delta", "d": delta })
+                        )));
+                    },
+                )
+            }
+            None => config::chat_tools(&model_call, &system_call, &messages_call, &tool_defs()),
         })
         .await
         {
@@ -543,6 +644,15 @@ async fn run_loop(
                 return Err(err);
             }
         };
+        // 各轮 token 相加：一次回答往往要调好几轮模型，只报最后一轮会严重低估
+        // （用户看到的「这次花了多少」应该是整次回答的总量）。
+        if let Some(one) = message.get("usage").filter(|value| !value.is_null()) {
+            let num = |key: &str| one.get(key).and_then(Value::as_u64).unwrap_or(0);
+            let sum = usage_sum.get_or_insert_with(config::TokenUsage::default);
+            sum.prompt_tokens += num("promptTokens");
+            sum.completion_tokens += num("completionTokens");
+            sum.total_tokens += num("totalTokens");
+        }
         let content = message
             .get("content")
             .and_then(Value::as_str)
@@ -560,6 +670,16 @@ async fn run_loop(
             answer = content;
             stopped = "finished";
             break;
+        }
+        // 这一轮「说了话又去调工具」：模型刚流出去的那段是**思考过程**，不是结论 ——
+        // 前端据此把它收进时间线（留在正文里会让用户以为答完了）。
+        emit_event(
+            emit,
+            json!({ "t": "round_end", "round": round, "calls": calls.len(), "thought": content }),
+        );
+        // 同一段叙述也按轮次记下来：刷新后要靠它把「这一步说了什么」放回工具前面
+        if !content.is_empty() {
+            texts.push(json!({ "round": round, "text": &content }));
         }
         for call in calls {
             let name = call
@@ -585,17 +705,27 @@ async fn run_loop(
                 .unwrap_or("call")
                 .to_string();
             let started = Instant::now();
-            let (ok, result) =
-                execute_tool(state, conn, database, protocol, thread_id, &name, &args, changes).await;
+            // 工具开始跑就先推一帧「正在做什么」：真实执行可能要几秒（describe/巡检/跑 SQL），
+            // 等结果出来再显示等于让用户干等
+            emit_event(
+                emit,
+                json!({ "t": "step_start", "round": round, "tool": name, "args": args }),
+            );
+            let (ok, result) = execute_tool(
+                state, conn, database, protocol, thread_id, &name, &args, changes, emit,
+            )
+            .await;
             let duration_ms = started.elapsed().as_millis() as u64;
-            steps.push(json!({
+            let step = json!({
                 "round": round,
                 "tool": name,
                 "args": args,
                 "ok": ok,
                 "durationMs": duration_ms,
                 "result": result.chars().take(600).collect::<String>(),
-            }));
+            });
+            emit_event(emit, json!({ "t": "step", "step": step }));
+            steps.push(step);
             messages.push(json!({
                 "role": "tool",
                 "tool_call_id": call_id,
@@ -611,10 +741,58 @@ async fn run_loop(
         }
     }
 
+    // 轮次用尽却一句话没说：**再要一次结论**（这次不给工具）。
+    // 旧行为是把最后一条工具结果原样贴给用户（像 dump），看着就是「查了半天没回答」。
+    if stopped == "maxRounds" && answer.trim().is_empty() {
+        let system_call = system.to_string();
+        let model_call = model.clone();
+        let mut forced = messages.clone();
+        forced.push(json!({
+            "role": "user",
+            "content": "工具轮数已经用完，不要再调用任何工具。\
+                        基于上面已经查到的结果，按步骤给出结论：做了哪几步、每步看到什么、\
+                        结论是什么、接下来该做什么；没查到的部分明确说「没查到」，不要猜。"
+        }));
+        let emit_call = emit.cloned();
+        let text = run_blocking(move || match &emit_call {
+            Some(tx) => {
+                let frames = tx.clone();
+                config::chat_tools_stream(
+                    &model_call,
+                    &system_call,
+                    &forced,
+                    &json!([]),
+                    |delta| {
+                        let _ = frames.send(Ok(format!(
+                            "data:{}\n\n",
+                            json!({ "t": "delta", "d": delta })
+                        )));
+                    },
+                )
+            }
+            None => config::chat_tools(&model_call, &system_call, &forced, &json!([])),
+        })
+        .await
+        .map(|message| {
+            message
+                .get("content")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string()
+        })
+        .unwrap_or_default();
+        if !text.trim().is_empty() {
+            answer = text;
+            stopped = "concluded";
+        }
+    }
+
     Ok(LoopOutcome {
         answer,
         rounds: rounds_used,
         stopped: stopped.to_string(),
+        texts,
+        usage: usage_sum,
     })
 }
 
@@ -651,6 +829,7 @@ async fn harvest_changes(
     protocol: dbmind_core::RuntimeProtocol,
     answer: &str,
     changes: &mut Vec<Value>,
+    emit: Option<&Emit>,
 ) {
     for block in sql_blocks(answer) {
         for stmt in dbmind_core::split_statements(protocol, &block) {
@@ -682,14 +861,18 @@ async fn harvest_changes(
             )
             .await
             {
-                Ok((id, risk, undo)) => changes.push(json!({
-                    "id": id,
-                    "title": title,
-                    "sql": sql,
-                    "risk": risk,
-                    "undoSql": undo,
-                    "status": "pending",
-                })),
+                Ok((id, risk, undo)) => {
+                    let change = json!({
+                        "id": id,
+                        "title": title,
+                        "sql": sql,
+                        "risk": risk,
+                        "undoSql": undo,
+                        "status": "pending",
+                    });
+                    emit_event(emit, json!({ "t": "change", "change": change.clone() }));
+                    changes.push(change)
+                }
                 Err(err) => {
                     // 建单失败不能把这一轮回答也弄失败：它只是补充
                     tracing::warn!(error = %err.message, "为回答里的写 SQL 补建变更单失败");
@@ -731,8 +914,56 @@ fn sql_blocks(answer: &str) -> Vec<String> {
     blocks
 }
 
-/// `POST /api/ai/agent`。
+/// `POST /api/ai/agent`：一次性返回（旧的调用方式，保留兼容）。
 pub async fn run(State(state): State<AppState>, Json(req): Json<AgentReq>) -> XResult<Json<Value>> {
+    Ok(Json(run_core(state, req, None).await?))
+}
+
+/// `POST /api/ai/agent/stream`：同一套逻辑的流式版本 —— 轮次、思考、工具调用、变更单
+/// 边走边推，结论逐字吐出（"深度思考"的界面就靠这些帧）。
+pub async fn run_stream(State(state): State<AppState>, Json(req): Json<AgentReq>) -> Response {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Result<String, std::io::Error>>();
+    let frames = tx.clone();
+    tokio::spawn(async move {
+        match run_core(state, req, Some(&frames)).await {
+            Ok(result) => {
+                // done 帧带完整结果：前端拿它做收尾（步骤、变更单、jobId、threadId 都在里面）
+                emit_event(Some(&frames), json!({ "t": "done", "result": result }));
+            }
+            Err(err) => {
+                // 错误也走帧：HTTP 头已经发出去了（200 SSE），只能靠帧告知，别让界面一直转圈
+                emit_event(
+                    Some(&frames),
+                    json!({ "t": "error", "error": err.message, "code": err.code }),
+                );
+            }
+        }
+    });
+    sse_response(rx)
+}
+
+/// 把帧通道包成 SSE 响应（`chat/stream` 同款响应头）。
+fn sse_response(
+    rx: tokio::sync::mpsc::UnboundedReceiver<Result<String, std::io::Error>>,
+) -> Response {
+    let stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx);
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "text/event-stream; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache, no-transform"),
+            (header::CONNECTION, "keep-alive"),
+        ],
+        Body::from_stream(stream),
+    )
+        .into_response()
+}
+
+async fn run_core(
+    state: AppState,
+    req: AgentReq,
+    emit: Option<&Emit>,
+) -> XResult<Value> {
     let conn = req
         .connection_id
         .clone()
@@ -750,10 +981,20 @@ pub async fn run(State(state): State<AppState>, Json(req): Json<AgentReq>) -> XR
     let model = config::resolve_with_budget(req.model_id.as_deref(), downgraded)?;
     let max_rounds = req.max_rounds.unwrap_or(DEFAULT_ROUNDS).clamp(1, MAX_ROUNDS);
 
+    // 聚焦表：用户在底栏勾的表就是「本次只看这几张」，一个都不空
+    let focus: Vec<String> = req
+        .tables
+        .iter()
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .collect();
     // 表清单先探一次当「开场提示」：能省掉一整轮工具往返，
-    // 而且模型知道表名后，第一句 SQL 就不容易写错
+    // 而且模型知道表名后，第一句 SQL 就不容易写错。
+    // **点了聚焦表就只报这几张** —— 把全库清单一列，模型就会去清单里挑别的表。
     let table_hint = if downgraded {
         String::new()
+    } else if !focus.is_empty() {
+        format!("用户指定的表：{}（字段用 describe_table 看）", focus.join("、"))
     } else {
         match tables_of(&state, &conn, &database).await {
             Ok(tables) if !tables.is_empty() => format!(
@@ -768,11 +1009,33 @@ pub async fn run(State(state): State<AppState>, Json(req): Json<AgentReq>) -> XR
             _ => String::new(),
         }
     };
+    // 知识库：与普通对话同一口径。召回要读文件、（向量模式下）还要打一次 embeddings，
+    // 都是阻塞操作 —— 必须 spawn_blocking，别卡住整个运行时；失败就当没有资料。
+    let kb_note = {
+        let ids = req.kb_ids.clone();
+        let asked = question.clone();
+        let pick = req.model_id.clone();
+        match tokio::task::spawn_blocking(move || {
+            crate::api::ai::kb::recall(&asked, &ids, pick.as_deref())
+        })
+        .await
+        {
+            Ok(Some(docs)) if !docs.trim().is_empty() => {
+                format!("\n【用户资料（用户选定的知识库召回，可能与本问无关）】\n{docs}\n")
+            }
+            _ => String::new(),
+        }
+    };
     // 语言约束：智能体的回答/变更单说明同样跟随界面语言
     let system = crate::api::ai::with_language(
-        system_prompt(dialect.kind.key(), &database, &table_hint),
+        format!(
+            "{}{kb_note}",
+            system_prompt(dialect.kind.key(), &database, &table_hint, &focus)
+        ),
         req.lang.as_deref(),
     );
+    // 底栏选中的插件技能：提示词拼进 system（与普通对话同一套），选着技能切深度思考不会失效
+    let system = crate::api::plugins::augment_system(system, &req.plugin_skills, req.lang.as_deref());
 
     // 待办**在跑之前**就建出来：中断才有东西可「继续」。
     // 以前是跑完才落库，中途断掉等于什么都没发生 —— 第二天回来接不上。
@@ -795,7 +1058,19 @@ pub async fn run(State(state): State<AppState>, Json(req): Json<AgentReq>) -> XR
             .unwrap_or_default()
     };
 
-    let thread_id = req.thread_id.clone().unwrap_or_default();
+    // 会话记账：与普通对话同一套口径（chat.rs 的 begin_turn / append_message）。
+    // 先落用户这一句 —— 即使工具调用中途失败或用户点停止，问过什么也留得住。
+    let thread_id = crate::api::ai::teammate::begin_turn(
+        req.thread_id.as_deref(),
+        req.persist,
+        &conn,
+        &database,
+        &question,
+    )
+    .unwrap_or_default();
+    if !thread_id.is_empty() {
+        crate::api::ai::teammate::append_message(&thread_id, "user", &question, None, None);
+    }
     // 历史对话：6 条 / 4000 字符封顶（比普通对话的 6000 更紧 —— 智能体自己还要装
     // 工具定义与工具结果，两者抢同一份上下文）。**只收 user/assistant**，客户端塞来的
     // system 一律丢弃，否则等于绕过这里的 system 规则。
@@ -821,6 +1096,7 @@ pub async fn run(State(state): State<AppState>, Json(req): Json<AgentReq>) -> XR
         &mut changes,
         max_rounds,
         &job_id,
+        emit,
     )
     .await?;
     let mut answer = outcome.answer;
@@ -830,7 +1106,39 @@ pub async fn run(State(state): State<AppState>, Json(req): Json<AgentReq>) -> XR
     // 兜底：模型偶尔把「改数据的 SQL」直接贴在回答里而不调 propose_change。
     // 口径是「只要有对库的实际操作（增删改）都算」—— 漏一张就等于这次改库没有风险分级、
     // 撤销语句和审计记录，所以这里补成变更单（执行仍然要人点）。
-    harvest_changes(&state, &conn, &database, &thread_id, protocol, &answer, &mut changes).await;
+    harvest_changes(
+        &state,
+        &conn,
+        &database,
+        &thread_id,
+        protocol,
+        &answer,
+        &mut changes,
+        emit,
+    )
+    .await;
+
+    // 回答也落会话：刷新/换页签回来点开这条记录，能看到完整的一问一答。
+    // 工具轨迹与变更单一起进 message.meta（正文只留回答本身）：深度思考的结论离开
+    // 「它查了什么、出了哪几张单」就没法复核 —— 只存正文等于把依据丢了（真机反馈）。
+    if !thread_id.is_empty() {
+        // jobId 也存进去：重开这条记录后点「允许」，前端还要拿它续跑（否则只能等下一轮提问）；
+        // texts 是每一轮的步骤叙述，刷新后要靠它把「文字 → 工具」还原成原来的顺序。
+        let meta = json!({
+            "steps": &steps,
+            "changes": &changes,
+            "jobId": &job_id,
+            "texts": &outcome.texts,
+        });
+        // usage 一起落库：不然刷新后右下角「消耗 N tokens」就没了
+        crate::api::ai::teammate::append_message(
+            &thread_id,
+            "assistant",
+            &answer,
+            outcome.usage.as_ref(),
+            Some(&meta),
+        );
+    }
 
     // 收尾：有待确认的变更单 ⇒ `waiting`（界面排在待办最上面）；纯查询 ⇒ `done`。
     // 顺手把变更单挂到这张 job 上，待办点进去才看得到它产出的单子。
@@ -844,7 +1152,7 @@ pub async fn run(State(state): State<AppState>, Json(req): Json<AgentReq>) -> XR
         let _ = store.ai_change_attach_job(&ids, &job_id);
     }
 
-    Ok(Json(json!({
+    Ok(json!({
         "success": true,
         "content": answer,
         "rounds": outcome.rounds,
@@ -853,6 +1161,8 @@ pub async fn run(State(state): State<AppState>, Json(req): Json<AgentReq>) -> XR
         "steps": steps,
         "changes": changes,
         "jobId": job_id,
+        // 整次回答的 token 用量（各轮相加）：前端据此在气泡底部显示「消耗 N tokens」
+        "usage": outcome.usage,
         "threadId": if thread_id.is_empty() { Value::Null } else { json!(thread_id) },
         "model": model.model,
         // 降级标记：超预算时上下文被压掉，前端据此提示「本次未读表结构」
@@ -860,7 +1170,7 @@ pub async fn run(State(state): State<AppState>, Json(req): Json<AgentReq>) -> XR
         // 「只读」现在指**智能体自己不写库**：它能出的最后一招是一张待确认的变更单，
         // 执行必须由人在界面上点。留着这个字段是为了让前端文案不用改。
         "readOnly": true,
-    })))
+    }))
 }
 
 #[derive(Deserialize, Default)]
@@ -871,6 +1181,10 @@ pub struct ResumeReq {
     /// 这次最多再跑几轮（默认沿用 6）
     #[serde(default)]
     pub max_rounds: Option<u32>,
+    /// 聚焦表：续跑时用户**可能已经换过表了**，带上当前选择才按新表继续。
+    /// 不带的话只能沿用 job 里那张旧表的上下文（用户：「下面已经重新选表了，回复的还是旧表」）。
+    #[serde(default)]
+    pub tables: Vec<String>,
 }
 
 /// `POST /api/ai/jobs/{id}/resume` —— 接着上次跑。
@@ -883,6 +1197,38 @@ pub async fn resume(
     axum::extract::Path(id): axum::extract::Path<String>,
     Json(req): Json<ResumeReq>,
 ) -> XResult<Json<Value>> {
+    Ok(Json(resume_core(state, id, req, None).await?))
+}
+
+/// `POST /api/ai/jobs/{id}/resume/stream` —— 续跑的流式版本。
+///
+/// <p>「审批之后继续」走这里：用户在变更单上点批准/拒绝，前端立刻接着调它，
+/// 新的思考过程与结论继续在这种对话里吐出来（而不是把整段结果一次性甩出来）。
+pub async fn resume_stream(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(req): Json<ResumeReq>,
+) -> Response {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Result<String, std::io::Error>>();
+    let frames = tx.clone();
+    tokio::spawn(async move {
+        match resume_core(state, id, req, Some(&frames)).await {
+            Ok(result) => emit_event(Some(&frames), json!({ "t": "done", "result": result })),
+            Err(err) => emit_event(
+                Some(&frames),
+                json!({ "t": "error", "error": err.message, "code": err.code }),
+            ),
+        }
+    });
+    sse_response(rx)
+}
+
+async fn resume_core(
+    state: AppState,
+    id: String,
+    req: ResumeReq,
+    emit: Option<&Emit>,
+) -> XResult<Value> {
     let store = dbmind_core::global_store().ok_or_else(|| XError::bad_request("数据库未就绪"))?;
     let job = store
         .ai_job_get(&id)?
@@ -936,19 +1282,31 @@ pub async fn resume(
         steps.push(step.clone());
     }
 
-    let table_hint = match tables_of(&state, &job.connection_id, &job.database_name).await {
-        Ok(tables) if !tables.is_empty() => format!(
-            "库里已有的表（供参考，仍以 list_tables 的结果为准）：{}",
-            tables
-                .iter()
-                .take(40)
-                .map(|table| table.name.clone())
-                .collect::<Vec<_>>()
-                .join("、")
-        ),
-        _ => String::new(),
+    // 聚焦表以**这次请求带的**为准（用户可能中途换了表）：与首跑同一套硬约束，
+    // 否则续跑会沿用历史里那张旧表（ai_jobs 表没有这列，只能靠请求带过来）
+    let focus: Vec<String> = req
+        .tables
+        .iter()
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .collect();
+    let table_hint = if !focus.is_empty() {
+        format!("用户指定的表：{}（字段用 describe_table 看）", focus.join("、"))
+    } else {
+        match tables_of(&state, &job.connection_id, &job.database_name).await {
+            Ok(tables) if !tables.is_empty() => format!(
+                "库里已有的表（供参考，仍以 list_tables 的结果为准）：{}",
+                tables
+                    .iter()
+                    .take(40)
+                    .map(|table| table.name.clone())
+                    .collect::<Vec<_>>()
+                    .join("、")
+            ),
+            _ => String::new(),
+        }
     };
-    let system = system_prompt(dialect.kind.key(), &job.database_name, &table_hint);
+    let system = system_prompt(dialect.kind.key(), &job.database_name, &table_hint, &focus);
 
     checkpoint_job(&id, "running", &steps, &job.result);
     let mut changes: Vec<Value> = Vec::new();
@@ -967,6 +1325,7 @@ pub async fn resume(
         &mut changes,
         max_rounds,
         &id,
+        emit,
     )
     .await?;
 
@@ -983,6 +1342,7 @@ pub async fn resume(
         protocol,
         &answer,
         &mut changes,
+        emit,
     )
     .await;
     let ids: Vec<String> = changes
@@ -1006,7 +1366,7 @@ pub async fn resume(
     };
     checkpoint_job(&id, status, &steps, &answer);
 
-    Ok(Json(json!({
+    Ok(json!({
         "success": true,
         "resumed": true,
         "jobId": id,
@@ -1017,6 +1377,35 @@ pub async fn resume(
         "steps": steps,
         "changes": changes,
         "model": model.model,
+        // 续跑这段的 token 用量：前端累加到底部脚注上（只加不换）
+        "usage": outcome.usage,
+        // 这一段的步骤叙述（首跑那条消息的 meta.texts 里已有旧的，续跑只补新的）
+        "texts": outcome.texts,
         "readOnly": true,
-    })))
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 提示词预算账本：system 与工具定义**每一轮**都要重发（默认最多 8 轮），
+    /// 多 100 token 就是一次对话多付 800。改文案后跑
+    /// `cargo test -p dbmind-web prompt_budget -- --nocapture` 看实际数字，
+    /// 断言是防回潮的护栏：确实需要加内容时同步调大并写明理由。
+    #[test]
+    fn prompt_budget() {
+        let est = crate::api::ai::context::estimate_tokens;
+        let system = system_prompt("mysql", "demo", "", &[]);
+        let with_focus = system_prompt("mysql", "demo", "", &["t_order".into(), "t_item".into()]);
+        let tools = tool_defs().to_string();
+        let sys_tokens = est(&system);
+        let tool_tokens = est(&tools);
+        println!("[budget] system       {} 字符 ≈ {} tokens", system.chars().count(), sys_tokens);
+        println!("[budget] system+focus {} 字符 ≈ {} tokens", with_focus.chars().count(), est(&with_focus));
+        println!("[budget] tools        {} 字符 ≈ {} tokens", tools.chars().count(), tool_tokens);
+        println!("[budget] 每轮固定开销 ≈ {} tokens", sys_tokens + tool_tokens);
+        assert!(sys_tokens <= 800, "智能体 system 涨到 {sys_tokens} tokens");
+        assert!(tool_tokens <= 580, "工具定义涨到 {tool_tokens} tokens");
+    }
 }

@@ -686,6 +686,129 @@ pub fn chat_tools(model: &ModelEntry, system: &str, messages: &[Value], tools: &
     Ok(message)
 }
 
+/// 带工具定义的**流式**对话：文本增量实时走 `on_delta`，返回值与 [`chat_tools`] 同形
+/// （assistant 的 message 对象：`content` + `tool_calls`）。
+///
+/// <p>为什么要自己把 `tool_calls` 拼起来：流式协议里它是按 `index` 分包下发的
+/// （`name` 先到、`arguments` 逐段拼），按普通 JSON 取只能拿到半截。
+///
+/// <p>智能体要「深度思考过程可见」就靠它：模型的每一段话边说边到界面，
+/// 工具调用照样能在循环里拿到完整参数。
+pub fn chat_tools_stream(
+    model: &ModelEntry,
+    system: &str,
+    messages: &[Value],
+    tools: &Value,
+    mut on_delta: impl FnMut(&str),
+) -> XResult<Value> {
+    let url = endpoint(&model.base_url, "/chat/completions");
+    let mut all: Vec<Value> = Vec::new();
+    let system = system.trim();
+    if !system.is_empty() {
+        all.push(json!({ "role": "system", "content": system }));
+    }
+    all.extend(messages.iter().cloned());
+    let mut body = request_body(model, Value::Array(all), true);
+    if !tools.is_null() {
+        body["tools"] = tools.clone();
+        body["tool_choice"] = json!("auto");
+    }
+    body["stream_options"] = json!({ "include_usage": true });
+    let response = post_chat(&url, model, &mut body, "text/event-stream")?;
+
+    let reader = BufReader::new(response.into_reader());
+    let mut content = String::new();
+    let mut usage: Option<TokenUsage> = None;
+    // index -> (id, name, arguments)：同一轮里可能并列多个工具调用
+    let mut calls: Vec<(String, String, String)> = Vec::new();
+    for line in reader.lines() {
+        let line = line.map_err(|e| XError::internal(format!("读取模型流失败：{e}")))?;
+        let line = line.trim();
+        if !line.starts_with("data:") {
+            continue;
+        }
+        let payload = line[5..].trim();
+        if payload.is_empty() {
+            continue;
+        }
+        if payload == "[DONE]" {
+            break;
+        }
+        let value: Value = match serde_json::from_str(payload) {
+            Ok(value) => value,
+            // 上游切包导致半截 JSON 是正常的，跳过
+            Err(_) => continue,
+        };
+        if let Some(seen) = parse_usage(&value) {
+            usage = Some(seen);
+        }
+        let Some(delta) = value
+            .get("choices")
+            .and_then(Value::as_array)
+            .and_then(|choices| choices.first())
+            .and_then(|choice| choice.get("delta"))
+        else {
+            continue;
+        };
+        if let Some(text) = delta.get("content").and_then(Value::as_str) {
+            if !text.is_empty() {
+                content.push_str(text);
+                on_delta(text);
+            }
+        }
+        if let Some(items) = delta.get("tool_calls").and_then(Value::as_array) {
+            for item in items {
+                let index = item.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+                while calls.len() <= index {
+                    calls.push((String::new(), String::new(), String::new()));
+                }
+                let slot = &mut calls[index];
+                if let Some(id) = item.get("id").and_then(Value::as_str) {
+                    if !id.is_empty() {
+                        slot.0 = id.to_string();
+                    }
+                }
+                if let Some(function) = item.get("function") {
+                    if let Some(name) = function.get("name").and_then(Value::as_str) {
+                        if !name.is_empty() {
+                            slot.1.push_str(name);
+                        }
+                    }
+                    if let Some(args) = function.get("arguments").and_then(Value::as_str) {
+                        slot.2.push_str(args);
+                    }
+                }
+            }
+        }
+    }
+    if content.trim().is_empty() && calls.iter().all(|(_, name, _)| name.is_empty()) {
+        return Err(XError::internal("模型既没有内容也没有工具调用（流式响应为空）"));
+    }
+    let tool_calls: Vec<Value> = calls
+        .into_iter()
+        .filter(|(_, name, _)| !name.is_empty())
+        .enumerate()
+        .map(|(index, (id, name, args))| {
+            json!({
+                "id": if id.is_empty() { format!("call_{index}") } else { id },
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "arguments": if args.trim().is_empty() { "{}".to_string() } else { args },
+                }
+            })
+        })
+        .collect();
+    record_usage(model, usage);
+    Ok(json!({
+        "role": "assistant",
+        "content": content,
+        "tool_calls": tool_calls,
+        // 用量随消息带回去：智能体一轮多调几次模型，汇总由调用方自己算
+        "usage": usage,
+    }))
+}
+
 /// 流式对话：每收到一个增量就回调一次（**阻塞**，调用方负责放到 blocking 线程里）。
 pub fn chat_stream(
     model: &ModelEntry,

@@ -74,6 +74,22 @@ const RE_OL = /^\s*\d+\.\s+/
 const RE_TABLE_SEP = /^\s*\|?[\s:|-]+\|[\s:|-]*$/
 
 /**
+ * 引用块的第一句像不像「提示卡」：风险 / 注意 / 结论 / 下一步。
+ * 只看开头几个字，避免正文里顺口提到「风险」也被整段染色。
+ */
+const CALLOUT_TONES = [
+  ['risk', /^(风险|警告|危险|严禁|不可恢复|⚠)/],
+  ['warn', /^(注意|提醒|小心|谨记)/],
+  ['ok', /^(结论|总结|结果|验证|已确认)/],
+  ['next', /^(下一步|后续|建议|可选)/]
+]
+const calloutTone = (text) => {
+  const head = String(text || '').replace(/^[\s>*_`~-]+/, '').slice(0, 10)
+  for (const [tone, re] of CALLOUT_TONES) if (re.test(head)) return tone
+  return ''
+}
+
+/**
  * 渲染 markdown → HTML 字符串。
  * 采用「逐行状态机」解析块级元素，行内元素交给 renderInline。
  *
@@ -174,7 +190,12 @@ export const renderMarkdown = (md, opts = {}) => {
         buf.push(lines[i].replace(RE_QUOTE, ''))
         i++
       }
-      out.push('<blockquote>' + renderMarkdown(buf.join('\n')) + '</blockquote>')
+      const body = buf.join('\n')
+      // 引用块按开头那个词上色：模型用 `> 风险：…` / `> 注意：…` / `> 结论：…` / `> 下一步：…`
+      // 当提示卡写，只有一种灰底就分不出「这是警告还是结论」。
+      const tone = calloutTone(body)
+      const cls = tone ? ` class="md-callout is-${tone}"` : ''
+      out.push(`<blockquote${cls}>` + renderMarkdown(body) + '</blockquote>')
       continue
     }
 

@@ -2164,6 +2164,43 @@ impl Store {
         Ok(conn.last_insert_rowid())
     }
 
+    /// 只保留会话里**最早的前 keep 条**消息，其余删掉（编辑提问后重新作答用）。
+    ///
+    /// <p>消息是追加式的：用户改了第 N 句重新问，第 N 句之后的问答就已经作废，
+    /// 不删的话刷新后旧答案又整段回来，等于「改了没用」。
+    /// 返回删掉的行数。
+    pub fn ai_message_trim(&self, thread_id: &str, keep: usize) -> Result<usize> {
+        let conn = self.lock();
+        let cutoff: Option<i64> = conn
+            .query_row(
+                "SELECT id FROM ai_messages WHERE thread_id = ?1 ORDER BY id ASC LIMIT 1 OFFSET ?2",
+                params![thread_id, keep as i64],
+                |row| row.get(0),
+            )
+            .ok();
+        let Some(cutoff) = cutoff else {
+            return Ok(0); // 不够 keep 条：没有可删的
+        };
+        let deleted = conn.execute(
+            "DELETE FROM ai_messages WHERE thread_id = ?1 AND id >= ?2",
+            params![thread_id, cutoff],
+        )?;
+        Ok(deleted)
+    }
+
+    /// 删掉会话里 id >= `from_id` 的消息（含这条本身）—— 「编辑第 N 句重新作答」用。
+    ///
+    /// <p>按 id 而不是按「第几条」：前端只显示最近 200 条、也可能过滤过空消息，
+    /// 用下标去算会多删（真踩过：把用户没被编辑的问答一起剪掉了）。
+    pub fn ai_message_trim_from(&self, thread_id: &str, from_id: i64) -> Result<usize> {
+        let conn = self.lock();
+        let deleted = conn.execute(
+            "DELETE FROM ai_messages WHERE thread_id = ?1 AND id >= ?2",
+            params![thread_id, from_id],
+        )?;
+        Ok(deleted)
+    }
+
     pub fn ai_message_list(&self, thread_id: &str, limit: usize) -> Result<Vec<AiMessageRow>> {
         let conn = self.lock();
         // 取**最近** N 条再翻回正序：一条长会话里用户更关心末尾在聊什么

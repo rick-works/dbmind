@@ -10272,12 +10272,13 @@ const connTypeSummary = computed(() =>
   padding: 0;
   color: var(--dc-code-text);
 }
+/* 引用块同样不画左侧竖条（与 AI 面板口径一致：整块淡底 + 圆角） */
 .ai-explain-body :deep(blockquote) {
-  border-left: 3px solid var(--dc-primary);
+  border: none;
   margin: 10px 0;
-  padding: 8px 16px;
+  padding: 9px 14px;
   background: var(--dc-primary-wash);
-  border-radius: 0 6px 6px 0;
+  border-radius: 8px;
 }
 </style>
 

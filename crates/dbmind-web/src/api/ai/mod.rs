@@ -903,7 +903,9 @@ pub fn routes() -> Router<AppState> {
         .merge(governance::routes())
         .merge(quality::routes())
         // 智能体：多轮工具调用（本域唯一一个「循环」接口）
+        // 流式版：思考过程 / 工具调用 / 变更单边走边推，结论逐字吐（"深度思考"的界面）
         .route("/api/ai/agent", post(agent::run))
+        .route("/api/ai/agent/stream", post(agent::run_stream))
         // AI 同事：会话 / 记忆 / 变更单 / 值班任务 / 待办 / 审计
         .route(
             "/api/ai/threads",
@@ -913,6 +915,8 @@ pub fn routes() -> Router<AppState> {
             "/api/ai/threads/{id}",
             get(teammate::thread_get).delete(teammate::thread_delete),
         )
+        // 编辑提问后重新作答：把这条之后的问答从会话里剪掉（只留前 keep 条）
+        .route("/api/ai/threads/{id}/trim", post(teammate::thread_trim))
         .route(
             "/api/ai/memory",
             get(teammate::memory_list).post(teammate::memory_add),
@@ -949,6 +953,8 @@ pub fn routes() -> Router<AppState> {
         .route("/api/ai/jobs/{id}/dismiss", post(teammate::job_dismiss))
         // 续跑：中断（断网 / 关面板 / 上游 5xx）后从已落库的步骤接着跑
         .route("/api/ai/jobs/{id}/resume", post(agent::resume))
+        // 审批后继续：批准/拒绝变更单后接着跑，输出仍然流式
+        .route("/api/ai/jobs/{id}/resume/stream", post(agent::resume_stream))
         .route("/api/ai/events", get(teammate::event_list))
         .route("/api/ai/events/export", get(teammate::event_export))
         .route(
