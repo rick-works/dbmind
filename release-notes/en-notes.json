@@ -783,5 +783,10 @@
     "Prompt slimmed down again: the version-sensitivity rule that duplicated the context is gone (about 70 tokens saved per call, persona prompt 280 → 207); instructions like “name the table if you need other columns” moved outside the schema data block so the model actually follows them",
     "The generating row is redone: label first, three dots animating after it, and a soft-red Stop pill on the right that turns solid red on hover",
     "Field masking: when rules exist but the AI-context channel is off, Settings now says so and offers a one-click switch (it used to fail silently); the Arguments header in tool details shows an item count"
+  ],
+  "v2.2.2": [
+    "The database dropdown on SQL script tabs now follows the same rule as the connection tree: the cache only makes the list appear instantly, while the backend always re-checks it. Switching databases or reopening a tab no longer shows a stale or mis-assembled list that disagrees with the tree.",
+    "Doris external catalogs are now queryable: after picking a database under an external catalog such as clickhouse_catalog, table names in your SQL are automatically qualified as catalog.db.table and run on the main connection, instead of failing with a stated-unsupported error.",
+    "The product promo video on the website is updated to the full 26-engine edition (v2.2.1 -> 26 engines, 2:15), with the poster and player page refreshed to match."
   ]
 }

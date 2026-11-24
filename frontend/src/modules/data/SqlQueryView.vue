@@ -5512,9 +5512,19 @@ const onExport = async (cmd) => {
   const database = selectedSchema.value
     ? `${selectedDatabase.value}.${selectedSchema.value}`
     : (selectedDatabase.value || props.database || undefined)
+  // 导出**当前展示的那条 SQL**，不是编辑器全文（sql.value）：
+  // 多段脚本是 executeSqlBatch 逐段执行的，每段一个结果 tab；导出必须拿当前 tab 的
+  // segmentSql，否则把 23 条语句当一条发过去，后端解析失败只回一个空 {}（「导出失败：{}」）。
+  // sortBaseText() 已优先取当前 tab 的 segmentSql，单段取 sortBaseSql —— 与翻页/排序同源。
+  // 有表头排序下推时导出排好序的结果，跟界面所见一致。
+  const exportSql = resultSortKeys.value.length ? buildSortedSql() : sortBaseText()
+  if (!exportSql || !String(exportSql).trim()) {
+    ElMessage.warning(t('sqlq.noResult'))
+    return
+  }
   if (scope === 'all') {
     // 导出全部走异步任务，后端流式分页导出，前端实时显示进度与日志
-    const payload = { sql: sql.value, format, database }
+    const payload = { sql: exportSql, format, database }
     // 登记到任务中心：长查询结果导出常常要跑几分钟，关掉进度窗不该等于放弃它
     await exportTask.start(connId, payload, props.scriptName || t('sqlq.queryResult'), format, null, {
       title: `${props.scriptName || t('sqlq.queryResult')} · ${String(format).toUpperCase()}`,
@@ -5527,7 +5537,7 @@ const onExport = async (cmd) => {
   // 不能走 exportTask.start —— 它默认提交到 /export/task（异步导出【全部】），
   // payload 里的 page/size 会被后端忽略，于是「导出当前页」变成「导出全表」。
   const payload = {
-    sql: sql.value,
+    sql: exportSql,
     format,
     database,
     page: Math.max(1, currentPage.value),
