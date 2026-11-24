@@ -669,6 +669,7 @@ import SortChip from '../../common/SortChip.vue'
 import { sortDirOf, sortIndexOf, toggleSortKey, normalizeSortKeys, makeRowComparator } from '../../utils/multiSort'
 import { rowWindow } from '../../utils/rowWindow'
 import { readSchemaCache, writeSchemaCache } from '../../utils/schemaCache'
+import { readDbListCache, writeDbListCache } from '../../utils/dbListCache'
 import {
   CaretRight, CaretLeft, Download, TrendCharts, Loading,
   Close, CircleCloseFilled, CircleCheckFilled, Coin, Brush, Clock,
@@ -5637,24 +5638,6 @@ const onSchemaChange = (val) => {
   selectedSchema.value = val || ''
 }
 
-// 数据库列表缓存（sessionStorage，60s）：切库/重开标签页时先用上次结果立刻渲染，
-// 避免不可达连接（要等满 connectTimeout，往往 10s）时下拉一直转圈
-const DB_LIST_TTL = 60 * 1000
-const readDbListCache = (cid) => {
-  try {
-    const it = JSON.parse(sessionStorage.getItem('xplore.dblist.' + cid) || 'null')
-    if (!it || !Array.isArray(it.list)) return null
-    return {
-      list: it.list,
-      cats: Array.isArray(it.cats) ? it.cats : [],
-      fresh: Date.now() - (it.ts || 0) < DB_LIST_TTL,
-    }
-  } catch { return null }
-}
-const writeDbListCache = (cid, list, cats) => {
-  try { sessionStorage.setItem('xplore.dblist.' + cid, JSON.stringify({ ts: Date.now(), list, cats: cats || [] })) } catch { /* 忽略配额/隐私模式 */ }
-}
-
 /** 库清单：catalog 方言（Doris）按「catalog.库」全限定列出，与左侧树完全一致 ——
  *  只列默认 catalog 的裸名，右键生成的 internal.ods 在下拉里既显示不出也选不中
  *  （真机踩过：下拉全是 __internal_schema / ods 这种裸名）。其余类型原样返回裸名。 */
@@ -5697,19 +5680,20 @@ const loadDatabases = async () => {
     await loadAfterDb()
     return
   }
-  const cached = readDbListCache(cid)
+  const cached = readDbListCache(sessionStorage, cid)
   if (cached) {
     databases.value = cached.list               // 有缓存先渲染
     dbCatalogs.value = cached.cats              // catalog 拆分状态也要立刻就位
     syncCatalogUi()
   }
-  loadingDbs.value = !cached                    // 只有真要等网络时才转圈
+  // 与左侧树同口径（schemaCache 的 stale-while-revalidate）：缓存只负责秒开，
+  // 数据由后端说了算 —— **命中缓存也必须发校准请求**。以前 TTL 内一次都不拉，
+  // 于是树早已刷新、下拉却停在上一次的清单（甚至内部拼错的脏值）长期对不上。
+  loadingDbs.value = !!cached                    // 有缓存时后台校准，不挡住用户
   try {
-    if (!cached || !cached.fresh) {
-      const list = isNoSql.value ? await noSqlDatabases(cid) : await loadDbList(cid)
-      databases.value = list || []
-      writeDbListCache(cid, databases.value, dbCatalogs.value)
-    }
+    const list = isNoSql.value ? await noSqlDatabases(cid) : await loadDbList(cid)
+    databases.value = list || []
+    writeDbListCache(sessionStorage, cid, databases.value, dbCatalogs.value)
   } catch (e) {
     if (!cached) {
       databases.value = []
@@ -5719,6 +5703,7 @@ const loadDatabases = async () => {
         ? t('sqlq.connMissing')
         : '加载数据库失败：' + msg)
     }
+    // 有缓存时保留旧清单（校准失败不应让用户眼前一空），但形态校验已保证它不是脏值
   } finally {
     loadingDbs.value = false
   }
