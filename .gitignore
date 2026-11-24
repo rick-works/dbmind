@@ -3,6 +3,8 @@
 # target/ 实测 21.9 GB（Rust 增量编译），进仓库会把首次提交变成一场灾难 —— 必须排除。
 /target/
 **/target/
+# 端口占用时用于另起编译的临时目标目录（如 target2），不是源码
+/target2/
 
 # 前端依赖与构建产物（node_modules 262 MB；dist 是构建输出，克隆后自己 build 即可）
 /frontend/node_modules/

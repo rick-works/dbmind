@@ -63,10 +63,10 @@ pub(crate) async fn apply(
         None => return sql,
     };
     let prefix = format!("[{}].", schema.replace(']', "]]"));
-    rewrite(&sql, &prefix, &known, false)
+    rewrite(&sql, &prefix, &known, false, false)
 }
 
-fn may_reference_table(sql: &str) -> bool {
+pub(crate) fn may_reference_table(sql: &str) -> bool {
     let lower = sql.to_ascii_lowercase();
     ["from", "join", "into", "update", "table"]
         .iter()
@@ -149,7 +149,7 @@ const POS_DDL: u8 = 3; // create/alter/drop/truncate table：新对象还不在�
 /// `prefix` 是完整前缀（含结尾的点），如 `[dbo].` 或 `` `clickhouse_catalog`.`oishi_ods`. ``。
 /// `mysql_quote`：MySQL/Doris 方言的标识符用反引号；`read_ident` 默认只认 `[x]` / `"x"`，
 /// 打开这个开关后也认 `` `x` ``（否则 `` from `biz_message` `` 会被当成标点跳过、补不上前缀）。
-pub(crate) fn rewrite(sql: &str, prefix: &str, known: &HashSet<String>, mysql_quote: bool) -> String {
+pub(crate) fn rewrite(sql: &str, prefix: &str, known: &HashSet<String>, mysql_quote: bool, prefix_any: bool) -> String {
     let chars: Vec<char> = sql.chars().collect();
     let n = chars.len();
     let ctes = collect_ctes(&chars);
@@ -222,7 +222,7 @@ pub(crate) fn rewrite(sql: &str, prefix: &str, known: &HashSet<String>, mysql_qu
                     && !name.starts_with('#')
                     && !name.starts_with('@')
                     && !ctes.contains(&name)
-                    && (expect_kind == POS_DDL || known.contains(&name));
+                    && (expect_kind == POS_DDL || known.contains(&name) || prefix_any);
                 if needs {
                     out.push_str(&quoted_schema);
                 }
@@ -447,7 +447,7 @@ mod tests {
     #[test]
     fn unqualified_table_gets_schema_prefix() {
         let known = set(&["d_date", "orders"]);
-        let got = rewrite("select * from [D_DATE] where 1=1", "[test].", &known, false);
+        let got = rewrite("select * from [D_DATE] where 1=1", "[test].", &known, false, false);
         assert_eq!(got, "select * from [test].[D_DATE] where 1=1");
     }
 
@@ -458,21 +458,21 @@ mod tests {
         let prefix = "`clickhouse_catalog`.`oishi_ods`.";
         // 裸名
         assert_eq!(
-            rewrite("SELECT `id` FROM `biz_message`;", prefix, &known, true),
+            rewrite("SELECT `id` FROM `biz_message`;", prefix, &known, true, true),
             "SELECT `id` FROM `clickhouse_catalog`.`oishi_ods`.`biz_message`;"
         );
         // 已带 catalog 前缀的不动（避免三段变四段）
         let sql = "select * from clickhouse_catalog.oishi_ods.biz_message";
-        assert_eq!(rewrite(sql, prefix, &known, true), sql);
-        // JOIN 两个表都补；不在清单里的临时表不补
+        assert_eq!(rewrite(sql, prefix, &known, true, true), sql);
+        // JOIN 的表都补（宽松模式下没有清单，凡是表名位置一律补）
         assert_eq!(
-            rewrite("select * from orders o join tmp t on 1=1", prefix, &known, true),
-            "select * from `clickhouse_catalog`.`oishi_ods`.orders o join tmp t on 1=1"
+            rewrite("select * from orders o join tmp t on 1=1", prefix, &known, true, true),
+            "select * from `clickhouse_catalog`.`oishi_ods`.orders o join `clickhouse_catalog`.`oishi_ods`.tmp t on 1=1"
         );
         // 字符串里的 from 不误改
         let sql = "select 'from biz_message' as x from orders";
         assert_eq!(
-            rewrite(sql, prefix, &known, true),
+            rewrite(sql, prefix, &known, true, true),
             "select 'from biz_message' as x from `clickhouse_catalog`.`oishi_ods`.orders"
         );
     }
@@ -480,12 +480,13 @@ mod tests {
     #[test]
     fn explicit_prefix_is_respected() {
         let known = set(&["orders"]);
-        let got = rewrite("select * from dbo.[orders]", "[test].", &known, false);
+        let got = rewrite("select * from dbo.[orders]", "[test].", &known, false, false);
         assert_eq!(got, "select * from dbo.[orders]");
         let got = rewrite(
             "select * from [dbo].[orders] o join demo.orders x on 1=1",
             "[test].",
             &known,
+            false,
             false,
         );
         assert_eq!(got, "select * from [dbo].[orders] o join demo.orders x on 1=1");
@@ -494,7 +495,7 @@ mod tests {
     #[test]
     fn unknown_name_is_left_alone() {
         let known = set(&["orders"]);
-        let got = rewrite("select * from dbo_only", "[test].", &known, false);
+        let got = rewrite("select * from dbo_only", "[test].", &known, false, false);
         assert_eq!(got, "select * from dbo_only", "不在目标模式里就别改");
     }
 
@@ -507,10 +508,10 @@ mod tests {
             "select * from #tmp",
             "select * from @tv",
         ] {
-            assert_eq!(rewrite(sql, "[test].", &known, false), sql);
+            assert_eq!(rewrite(sql, "[test].", &known, false, false), sql);
         }
         assert_eq!(
-            rewrite("select a, count(*) from orders group by a", "[test].", &known, false),
+            rewrite("select a, count(*) from orders group by a", "[test].", &known, false, false),
             "select a, count(*) from [test].orders group by a"
         );
     }
@@ -518,25 +519,25 @@ mod tests {
     #[test]
     fn cte_and_comma_list() {
         let known = set(&["orders", "items", "c"]);
-        let got = rewrite("with c as (select * from orders) select * from c", "[test].", &known, false);
+        let got = rewrite("with c as (select * from orders) select * from c", "[test].", &known, false, false);
         assert_eq!(got, "with c as (select * from [test].orders) select * from c");
-        let got = rewrite("select * from orders, items where 1=1", "[test].", &known, false);
+        let got = rewrite("select * from orders, items where 1=1", "[test].", &known, false, false);
         assert_eq!(got, "select * from [test].orders, [test].items where 1=1");
     }
 
     #[test]
     fn ddl_target_always_prefixed() {
         let known = set(&[]);
-        let got = rewrite("create table [t1] ([id] varchar(20))", "[test].", &known, false);
+        let got = rewrite("create table [t1] ([id] varchar(20))", "[test].", &known, false, false);
         assert_eq!(got, "create table [test].[t1] ([id] varchar(20))");
-        let got = rewrite("alter table [dbo].[t1] add c int", "[test].", &known, false);
+        let got = rewrite("alter table [dbo].[t1] add c int", "[test].", &known, false, false);
         assert_eq!(got, "alter table [dbo].[t1] add c int");
     }
 
     #[test]
     fn multi_statement_resets_state() {
         let known = set(&["a", "b"]);
-        let got = rewrite("select * from a; select * from b", "[test].", &known, false);
+        let got = rewrite("select * from a; select * from b", "[test].", &known, false, false);
         assert_eq!(got, "select * from [test].a; select * from [test].b");
     }
 
@@ -547,6 +548,7 @@ mod tests {
             "select 'from orders' as x -- from orders\nfrom orders",
             "[test].",
             &known,
+            false,
             false,
         );
         assert_eq!(

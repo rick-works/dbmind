@@ -97,11 +97,19 @@ pub(crate) async fn apply(
     sql: String,
 ) -> Option<String> {
     let (catalog, db) = external_catalog_of(&dialect, database)?;
-    let known = tables_of(state, conn, &catalog, &db, &dialect).await?;
+    // 表清单只是「更精确」的改写依据，不是前提：连不上 / 没权限查 information_schema 时
+    // 仍要改写（宽松模式给所有表引用补前缀），否则又退回 scope 那句硬拒绝。
+    // 例外：SQL 里根本没有表引用（select 1 之类）—— 不必改写，直接走原路径。
+    if !super::mssql_scope::may_reference_table(&sql) {
+        return None;
+    }
+    let known = tables_of(state, conn, &catalog, &db, &dialect)
+        .await
+        .unwrap_or_default();
     let prefix = format!(
         "{}.{}.",
         dialect.quote_exact(&catalog),
         dialect.quote_exact(&db)
     );
-    Some(super::mssql_scope::rewrite(&sql, &prefix, &known, true))
+    Some(super::mssql_scope::rewrite(&sql, &prefix, &known, true, true))
 }
