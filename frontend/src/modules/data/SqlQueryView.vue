@@ -661,6 +661,7 @@ import { guardConnWrite, loadProtectProd } from '../../utils/connGuard'
 import { renderMarkdown, extractCodeBlocks } from '../../utils/markdown'
 import { splitSqlStatements, splitSqlStatementRanges } from '../../utils/sqlSplit'
 import { applyTableSort, stripTailSemicolon } from '../../utils/sqlTopLevel'
+import { singleTableOf } from '../../utils/sqlTarget'
 import { useExcelSelection } from '../../utils/excelSelection'
 import { columnAlignClasses } from '../../utils/cellAlign'
 import SortGlyph from '../../common/SortGlyph.vue'
@@ -3110,11 +3111,19 @@ const tableNames = ref([]) // 当前库的表名缓存（用于编辑器补全�
 
 // ========== 字段脱敏（结果表格出口） ==========
 // 只打「显示」这一层：复制、导出、就地编辑拿到的仍是原文。
-// 规则的「表」在这里命中不了（SQL 结果的表名不可靠：JOIN / 别名 / 聚合都可能），
-// 所以只应用「表为空 = 任意表」的规则 —— 与后端智能体工具结果同一个口径。
+//
+// 规则的「表」是否命中，取决于这次结果来自哪张表：
+//  - 「查看表数据」那条路表名确定，钉表规则照常命中；
+//  - SQL 编辑器以前**一律传空表名**，于是针对具体表的脱敏规则（设置里最常见的配法）
+//    在查询结果上永远不生效 —— 表双击看得见哈希、写 SELECT * 却是明文，就是这个原因。
+//  现在从**本次实际执行的 SQL** 保守解析：只有确定是单表 SELECT 才带表名，
+//  JOIN / 子查询 / 多表一律留空（宁可不打码，也不能把 A 表的规则贴到 B 表列上）。
 const resMaskCols = ref({}) // 列名 → 处理方式
 const resMaskAes = ref({}) // AES 异步：`列\0原文` → 密文
 const resMaskPending = new Set()
+// 本次执行用的 SQL（在 runSql 里和 lastExecSql 一起写）。放在这里声明避免 watch
+// immediate 时读到后面才声明的 lastExecSql 触发 TDZ。
+const resMaskSql = ref('')
 
 const refreshResMask = async () => {
   const cfg = await ensureMaskConfig()
@@ -3122,16 +3131,25 @@ const refreshResMask = async () => {
     resMaskCols.value = {}
     return
   }
+  // dbScope 有两种带点形态：catalog 方言是 `catalog.库`（规则按裸库名配 → 取后段），
+  // 普通方言是 `库.schema`（规则按库名配 → 取前段）。按 selectedCatalog 区分。
+  const dbRaw = dbScope.value || ''
+  const dot = dbRaw.indexOf('.')
+  let dbForMask = dbRaw
+  if (dot > 0) {
+    dbForMask = selectedCatalog.value ? dbRaw.slice(dot + 1) : dbRaw.slice(0, dot)
+  }
   resMaskCols.value = gridMethods({
     connectionId: selectedConnId.value || props.conn?.id,
-    database: dbScope.value,
-    table: '',
+    database: dbForMask,
+    table: singleTableOf(resMaskSql.value),
     columns: result.value?.columns || []
   }, cfg)
 }
 
 watch(
-  [() => selectedConnId.value, () => dbScope.value, () => result.value?.columns, () => result.value?.rows],
+  [() => selectedConnId.value, () => dbScope.value, () => selectedCatalog.value,
+   () => resMaskSql.value, () => result.value?.columns, () => result.value?.rows],
   () => { refreshResMask() },
   { immediate: true }
 )
@@ -4795,6 +4813,7 @@ const showBatchResult = (b) => {
   }))
   activeResultIdx.value = 0
   result.value = results[0]
+  resMaskSql.value = results[0].sql || ''
   // 首个 tab 若总数未知，异步补齐（后端批量路径也不再同步 COUNT）
   fetchCountFor(result.value, results[0].sql || '')
   // 编辑器文本含多段但实际仅拆出单段（例程块 / 注释等）：按单结果做收尾提示
@@ -4824,6 +4843,7 @@ const selectResultTab = (i) => {
   if (stmt) gotoStatement(stmt)
   activeResultIdx.value = i
   result.value = item.res
+  resMaskSql.value = item.segmentSql || item.res?.sql || '' // 每个结果段的脱敏按自己的表命中
   // 换结果集 ⇒ 行号基准变了，编辑缓冲作废（快照守卫也会拦过期提交）
   discardEdits()
   // 切到的 tab 若总数未知，异步补齐（只数当前展示的段，不并发数全部）
@@ -5142,6 +5162,7 @@ const runSql = async (page = 1, size = pageSize.value, batchable = true, overrid
     }
   }
   lastExecSql = execSql
+  resMaskSql.value = execSql // 结果表格的钉表脱敏规则按本次实际 SQL 解析表名
   // 用户重新执行（不是翻页、也不是排序重跑）⇒ 换一条排序基准 SQL，旧的排序状态一起清掉
   if (!overrideSql) {
     sortBaseSql = execSql

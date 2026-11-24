@@ -62,6 +62,39 @@ export const tableSegsOf = (sql) => {
 }
 
 /**
+ * 保守地取「简单单表 SELECT」的表名（给结果表格的字段脱敏用来命中钉表规则）。
+ *
+ * 只在**确定**只有一张表时返回名字，拿不准一律返回 ''：
+ *   - `select * from t` / `select a,b from "db"."t" where …` / `from t;` / `from t -- 注释`  ✔
+ *   - JOIN / 逗号多表 / UNION / 子查询 / `from (select …)` / 表函数  → ''
+ * 理由与后端 `mask.rs` 一致：宁可不打码，也不能把 A 表的脱敏规则贴到 B 表的列上。
+ * 返回的是**表段**（最后一段），库/模式由调用方的 database 负责。
+ */
+export const singleTableOf = (sql) => {
+  let text = String(sql || '').trim()
+  if (!text) return ''
+  // 多语句：只有一条才算（sqlSplit 之外的简单判定：两个分号中间还有内容）
+  if ((text.match(/;/g) || []).length > 1) return ''
+  text = text.replace(/;+\s*$/, '').trim()
+  // 只认 select / with 开头的只读查询；with（CTE）里可能藏多张表，直接放弃
+  if (!/^select\b/i.test(text)) return ''
+  // 顶层危险结构：JOIN / UNION / 子查询 / 逗号多表。字符串常量里出现这些词会误伤，
+  // 但那只会导致"少打码"（返回 ''），不会错打，符合保守原则。
+  if (/\b(join|union|intersect|except)\b/i.test(text)) return ''
+  if (/\(\s*select\b/i.test(text)) return ''
+  const from = /\bfrom\s+([`"[\]\w.$]+)([\s\S]*)$/i.exec(text)
+  if (!from || !from[1]) return ''
+  const rest = from[2] || ''
+  // `from f_split(…)` 是表值函数，不是表；补错前缀会把脱敏贴到不存在的表上
+  if (/^\s*\(/.test(rest)) return ''
+  // FROM 之后若还有顶层逗号（另一张表）—— 简单判定：逗号后面跟着标识符且不在括号里
+  if (/^\s*,|[\s)],\s*[`"[\]\w]/i.test(rest)) return ''
+  const segs = splitIdent(from[1])
+  if (segs.length === 0) return ''
+  return segs[segs.length - 1]
+}
+
+/**
  * 拼「连接.库.模式.表」这类路径。
  *
  * @param {{sql?:string, database?:string, connectionId?:string}} change 变更单/记录行
