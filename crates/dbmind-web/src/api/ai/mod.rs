@@ -331,6 +331,13 @@ pub async fn schema_context(
         text.push('\n');
     }
 
+    // AI 上下文出口的脱敏（与 context.rs 同口径）：问数主路径走的是这里而不是
+    // context::build，以前样例行给的是原值，连「表为空」的通用规则都不生效 ——
+    // 设置里打开「AI 上下文与邮件」却仍把手机号/金额原样发给模型。
+    // 读失败按未启用处理：一条坏配置不该让整个问数打不开。
+    let mask_cfg = crate::api::ai::mask::load(state).await;
+    let mask_key = crate::api::ai::mask::load_key(state, &mask_cfg).await;
+
     let mut columns_total = 0;
     let mut omitted_tables = 0usize;
     for (table_idx, table) in detail.iter().enumerate() {
@@ -372,9 +379,8 @@ pub async fn schema_context(
             text.push_str(&line);
             text.push('\n');
         }
-        // 样例数据：上游会给 2 行**脱敏**样例；这里给 2 行原值 ——
-        // 「列里到底长什么样」对写对 WHERE 条件帮助极大。
-        // 不做脱敏是本项目与上游的**已知差异**，记录在此，不假装没有。
+        // 样例数据：给 2 行供模型看清列的取值形态，但**先按 AI 上下文出口的脱敏规则打码**
+        // （钉表规则在这里能命中：table 就是循环变量，样例本来就是单表 select *）。
         let sample_sql = format!(
             "select * from {} {}",
             dialect.quote(table),
@@ -386,7 +392,33 @@ pub async fn schema_context(
             for row in crate::api::meta::rows_of(&result) {
                 let pairs: Vec<String> = row
                     .iter()
-                    .map(|(key, value)| format!("{key}={}", short(value)))
+                    .map(|(key, value)| {
+                        let hit = mask_cfg.method_for(
+                            crate::api::ai::mask::MaskChannel::Llm,
+                            conn, database, Some(table.as_str()), key,
+                        ).or_else(|| {
+                            // Doris catalog：`catalog.库` 写法兼容按裸库名配的规则
+                            let (_, bare) = database.rsplit_once('.')?;
+                            if bare.is_empty() { None } else {
+                                mask_cfg.method_for(
+                                    crate::api::ai::mask::MaskChannel::Llm,
+                                    conn, bare, Some(table.as_str()), key,
+                                )
+                            }
+                        });
+                        if let Some(method) = hit {
+                            // 先掩码再截断：反过来会把掩码串截掉一截，模型看到半个摘要
+                            let raw = match value {
+                                Value::Null => "NULL".to_string(),
+                                Value::String(text) => text.clone(),
+                                other => other.to_string(),
+                            };
+                            format!("{key}={}", crate::api::ai::mask::mask_value(
+                                &raw, method, &mask_key))
+                        } else {
+                            format!("{key}={}", short(value))
+                        }
+                    })
                     .collect();
                 let line = format!("  样例：{}\n", pairs.join(", "));
                 if sample_chars > 0 && sample_chars + line.chars().count() > SAMPLE_CHARS_PER_TABLE {

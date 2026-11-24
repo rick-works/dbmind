@@ -5543,9 +5543,13 @@ const onExport = async (cmd) => {
     ElMessage.warning(t('sqlq.noResult'))
     return
   }
+  // 导出的表名：后端导出出口（ExportMask）按「连接+库+表+列」命中脱敏规则。
+  // 以前 SQL 查询导出不带 table，钉表规则在这里永远不生效 —— 表格里看着是哈希，
+  // 导出的 CSV 却是明文。单表 SELECT 解析得出表名就带上；JOIN 等保守留空（不误打）。
+  const exportTable = singleTableOf(exportSql)
   if (scope === 'all') {
     // 导出全部走异步任务，后端流式分页导出，前端实时显示进度与日志
-    const payload = { sql: exportSql, format, database }
+    const payload = { sql: exportSql, format, database, table: exportTable }
     // 登记到任务中心：长查询结果导出常常要跑几分钟，关掉进度窗不该等于放弃它
     await exportTask.start(connId, payload, props.scriptName || t('sqlq.queryResult'), format, null, {
       title: `${props.scriptName || t('sqlq.queryResult')} · ${String(format).toUpperCase()}`,
@@ -5561,6 +5565,7 @@ const onExport = async (cmd) => {
     sql: exportSql,
     format,
     database,
+    table: exportTable,
     page: Math.max(1, currentPage.value),
     size: Math.max(1, pageSize.value)
   }

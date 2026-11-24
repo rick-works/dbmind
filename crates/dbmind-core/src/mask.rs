@@ -419,6 +419,69 @@ pub fn mask_value(raw: &str, method: MaskMethod, key: &MaskKey) -> String {
     }
 }
 
+/// 保守地从一条 SQL 里取「单表 SELECT」的表名，给 AI 工具结果 / MCP 结果/
+/// 导出这类「拿不到确定表名」的出口用来命中钉表脱敏规则。
+///
+/// 只在**确定**只有一张表时返回名字，拿不准一律 `None`：
+///   - `select * from t` / `select a from "db"."t" where …` / `from t;`  ✔
+///   - JOIN / UNION / 子查询 / 逗号多表 / 表函数 / 多语句 / 非 SELECT → None
+/// 与 `MaskRule::hits` 的取舍一致：宁可不打码，也不能把 A 表的规则贴到 B 表的列上
+/// （模型/MCP 看到一屏 `***` 比看到明文更糟）。
+pub fn single_table_of(sql: &str) -> Option<String> {
+    let text = sql.trim();
+    let first_word = text.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
+    if first_word != "select" { return None }
+    // 分号只在结尾允许（多语句直接放弃）
+    let core = text.trim_end_matches(';').trim();
+    if core.contains(';') { return None }
+    // 只把换行/制表换成空格并转小写，**不合并连续空白** —— 长度与 core 保持一致，
+    // 下面 find(" from ") 拿到的字节偏移才能直接用来从 core 截原文（保留表名大小写）。
+    let low: String = core
+        .chars()
+        .map(|c| if c.is_whitespace() { ' ' } else { c.to_ascii_lowercase() })
+        .collect();
+    if [" join ", " union ", " intersect ", " except ", " from ("].iter().any(|k| low.contains(k)) {
+        return None;
+    }
+    let from = low.find(" from ")?;
+    let after = core[from + 6..].trim_start();
+    if after.starts_with('(') { return None } // 表值函数
+
+    // 读 FROM 后的标识符：裸名 / `x` / "x" / [x]，可带 1~2 段点号
+    let chars: Vec<char> = after.chars().collect();
+    let mut i = 0usize;
+    let mut seg = String::new();
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '.' {
+            if seg.is_empty() { return None }
+            seg.clear(); // 下一段；最终 seg 就是最后一段（表名）
+            i += 1;
+            continue;
+        }
+        if c.is_alphanumeric() || c == '_' || c == '$' {
+            seg.push(c);
+            i += 1;
+            continue;
+        }
+        if c == '`' || c == '"' || c == '[' {
+            let close = if c == '[' { ']' } else { c };
+            i += 1;
+            while i < chars.len() && chars[i] != close { seg.push(chars[i]); i += 1 }
+            if i >= chars.len() { return None }
+            i += 1;
+            continue;
+        }
+        break;
+    }
+    if seg.is_empty() { return None }
+    // 后面紧跟逗号 = 多表；紧跟 '(' = 表函数
+    let rest: String = chars[i..].iter().collect();
+    let rest = rest.trim_start();
+    if rest.starts_with('(') || rest.starts_with(',') { return None }
+    if seg.is_empty() { None } else { Some(seg) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -438,6 +501,26 @@ mod tests {
             column: column.to_string(),
             method: MaskMethod::Md5,
             note: None,
+        }
+    }
+
+    #[test]
+    fn single_table_of_is_conservative() {
+        assert_eq!(single_table_of("SELECT\n*\nFROM \"DM_ORDER_SUMMERY\";").as_deref(), Some("DM_ORDER_SUMMERY"));
+        assert_eq!(single_table_of("select a from `demo`.`t1` where x=1").as_deref(), Some("t1"));
+        assert_eq!(single_table_of("select * from [dbo].[orders]").as_deref(), Some("orders"));
+        // 拿不准的一律 None：钉表规则宁可不命中，也不能贴错表
+        for sql in [
+            "select * from a join b on 1=1",
+            "select * from a, b",
+            "select * from a union select * from b",
+            "select * from (select * from t) x",
+            "select * from f_split(1)",
+            "select * from a; select * from b;",
+            "update t set a=1",
+            "",
+        ] {
+            assert_eq!(single_table_of(sql), None, "sql={sql}");
         }
     }
 

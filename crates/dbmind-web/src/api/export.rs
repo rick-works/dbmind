@@ -1788,9 +1788,19 @@ impl ExportMask {
         }
         let hit = {
             let (conns, config, database, table) = (&self.conns, &self.config, &self.database, &self.table);
-            conns
+            let first = conns
                 .iter()
-                .find_map(|conn| config.method_for(MaskChannel::Export, conn, database, Some(table), column))
+                .find_map(|conn| config.method_for(MaskChannel::Export, conn, database, Some(table), column));
+            // Doris 的 catalog 场景：前端库作用域写成 `catalog.库`，而脱敏规则按裸库名配置
+            // （与结果表格出口同一口径）。第一段没命中时再用点号后那截试一次 ——
+            // 连接、表、列仍然钉着，不会因此误打到别的规则上。
+            first.or_else(|| {
+                let (_, bare) = database.rsplit_once('.')?;
+                if bare.is_empty() { return None }
+                conns.iter().find_map(|conn| {
+                    config.method_for(MaskChannel::Export, conn, bare, Some(table), column)
+                })
+            })
         };
         self.cache.insert(column.to_string(), hit);
         hit

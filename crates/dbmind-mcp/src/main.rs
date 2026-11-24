@@ -212,14 +212,20 @@ impl Server {
     /// 对 `dbmind_execute_query` 的结果行应用 `Mcp` 通道的脱敏规则。
     ///
     /// 返回（脱敏后的行，被脱敏的列数）。列数只为让客户端知道「这是摘要不是原文」。
-    fn mask_mcp_rows(&self, connection: &str, rows: Vec<Value>) -> (Vec<Value>, usize) {
+    fn mask_mcp_rows(
+        &self,
+        connection: &str,
+        database: &str,
+        table: Option<&str>,
+        rows: Vec<Value>,
+    ) -> (Vec<Value>, usize) {
         let config = self.mask_config();
         if config.rules.is_empty() || !config.channel_on(dbmind_core::mask::MaskChannel::Mcp) {
             return (rows, 0);
         }
         let key = self.mask_key(&config);
         let conns = self.mask_conn_keys(connection);
-        mask_rows(rows, &config, &key, &conns)
+        mask_rows(rows, &config, &key, &conns, database, table)
     }
 
     /// connection 参数：客户端没传时回落到「默认连接」设置（空 = 照旧报缺参）。
@@ -786,6 +792,13 @@ dbmind_list_databases 拿库清单，再给 database 参数（PG / SQL Server / 
             "dbmind_execute_query" => {
                 let connection = self.connection_arg(args)?;
                 let sql = required_str(args, "sql")?;
+                // 脱敏用的库/表：库取工具参数或连接默认库，表从 SQL 保守解析（单表 SELECT 才有）
+                let (mask_db, _mask_schema) = match self.record_of(&connection) {
+                    Ok(rec) => self.scope_of(args, &rec),
+                    Err(_) => (None, None),
+                };
+                let mask_db = mask_db.unwrap_or_default();
+                let mask_table = dbmind_core::mask::single_table_of(&sql);
                 let mut options = QueryOptions::default();
                 // 行数与超时的默认值/上限都来自设置页（MCP 页签）：客户端没传用设置的默认；
                 // 传了也会被设置的「最大行数」夹住 —— 界面设 100 行，模型要 10 万行也拿不到。
@@ -836,7 +849,8 @@ dbmind_list_databases 拿库清单，再给 database 参数（PG / SQL Server / 
                 // 字段脱敏（`Mcp` 通道）：这里返回的是真实数据行，一旦发出去就是出站流量 ——
                 // 与 AI 上下文用同一份规则与算法（`dbmind_core::mask`），否则「设置里配了、
                 // MCP 客户端却拿到明文」就是最糟的那种不一致。
-                let (rows, masked) = self.mask_mcp_rows(&connection, render_rows(&result));
+                let (rows, masked) = self.mask_mcp_rows(
+                    &connection, &mask_db, mask_table.as_deref(), render_rows(&result));
                 Ok(json!({
                     "executionId": result.execution_id,
                     "statementKind": result.statement_kind.as_str(),
@@ -1041,9 +1055,9 @@ fn cell_to_json(cell: &dbmind_core::CellValue) -> Value {
 
 /// 结果行按 `Mcp` 通道打码（[`Server::mask_mcp_rows`] 的纯函数部分，便于单测）。
 ///
-/// 边界与 AI 侧一致，照实说：**表名未知**（JOIN / 子查询别名都可能），所以只应用
-/// 「表为空 = 任意表」的规则；**库名也未知**，所以只靠「连接 + 列名」命中 ——
-/// 钉了表或库的规则在这里不参与，宁可不匹配，也不把无关列打成 `***` 让客户端失明。
+/// `database` / `table` 由调用方从工具参数（连接默认库 + SQL）解析：单表 SELECT 能命中
+/// 钉表规则，JOIN / 子查询解析不出时 table=None —— 只应用「表为空 = 任意表」的规则，
+/// 宁可不匹配，也不把无关列打成 `***` 让客户端失明。
 ///
 /// `conns` 是同一个连接的几种写法（调用方传的名字 / id）：规则里存的是 id、客户端习惯传
 /// 名字，只比一种就会出现「设置了规则、客户端照样拿到明文」。
@@ -1052,6 +1066,8 @@ fn mask_rows(
     config: &dbmind_core::mask::MaskConfig,
     key: &dbmind_core::mask::MaskKey,
     conns: &[String],
+    database: &str,
+    table: Option<&str>,
 ) -> (Vec<Value>, usize) {
     let mut masked: std::collections::HashSet<String> = std::collections::HashSet::new();
     let out: Vec<Value> = rows
@@ -1071,13 +1087,20 @@ fn mask_rows(
                 };
                 let method = plain.as_ref().and_then(|_| {
                     conns.iter().find_map(|conn| {
-                        config.method_for(
+                        let hit = config.method_for(
                             dbmind_core::mask::MaskChannel::Mcp,
-                            conn,
-                            "",
-                            None,
-                            &column,
-                        )
+                            conn, database, table, &column,
+                        );
+                        hit.or_else(|| {
+                            // Doris catalog 的 `catalog.库`：兼容按裸库名配的规则
+                            let (_, bare) = database.rsplit_once('.')?;
+                            if bare.is_empty() { None } else {
+                                config.method_for(
+                                    dbmind_core::mask::MaskChannel::Mcp,
+                                    conn, bare, table, &column,
+                                )
+                            }
+                        })
                     })
                 });
                 match (method, plain) {
@@ -1272,7 +1295,7 @@ mod tests {
             json!({ "phone": "13812348001", "id": 8, "name": "李四", "note": "ok" }),
         ];
         let cfg = config(true, vec![rule(None, "*phone", MaskMethod::Md5)]);
-        let (out, masked) = mask_rows(rows, &cfg, &[0u8; 32], &["conn_a".to_string()]);
+        let (out, masked) = mask_rows(rows, &cfg, &[0u8; 32], &["conn_a".to_string()], "", None);
         assert_eq!(masked, 1);
         let first = out[0]["phone"].as_str().unwrap();
         assert_eq!(first.len(), 32);
@@ -1291,7 +1314,7 @@ mod tests {
     fn mcp_switch_off_keeps_plaintext() {
         let rows = vec![json!({ "phone": "13812348000" })];
         let cfg = config(false, vec![rule(None, "phone", MaskMethod::Star)]);
-        let (out, masked) = mask_rows(rows, &cfg, &[0u8; 32], &["conn_a".to_string()]);
+        let (out, masked) = mask_rows(rows, &cfg, &[0u8; 32], &["conn_a".to_string()], "", None);
         assert_eq!(masked, 0);
         assert_eq!(out[0]["phone"], json!("13812348000"));
     }
@@ -1300,10 +1323,17 @@ mod tests {
     fn table_pinned_rules_do_not_hit_unknown_tables() {
         let rows = vec![json!({ "phone": "13812348000" })];
         let cfg = config(true, vec![rule(Some("users"), "phone", MaskMethod::Star)]);
-        let (out, masked) = mask_rows(rows, &cfg, &[0u8; 32], &["conn_a".to_string()]);
-        // 工具结果不知道表名：钉表规则不参与，宁可不匹配也不乱打码
+        // 解析不出表名（JOIN 等）时钉表规则不参与：宁可不匹配也不乱打码
+        let (out, masked) = mask_rows(rows, &cfg, &[0u8; 32], &["conn_a".to_string()], "", None);
         assert_eq!(masked, 0);
         assert_eq!(out[0]["phone"], json!("13812348000"));
+
+        // 已知单表名时钉表规则命中（修复：execute_query 从 SQL 保守解析表名传进来）
+        let rows = vec![json!({ "phone": "13812348000" })];
+        let (out, masked) = mask_rows(
+            rows, &cfg, &[0u8; 32], &["conn_a".to_string()], "", Some("users"));
+        assert_eq!(masked, 1);
+        assert_eq!(out[0]["phone"], json!("***"));
     }
 
     #[test]
@@ -1340,10 +1370,12 @@ mod tests {
             &cfg,
             &[0u8; 32],
             &["生产库".to_string(), "conn_1".to_string()],
+            "",
+            None,
         );
         assert_eq!(hit, 1);
         // 不在这个连接上：不命中
-        let (_, miss) = mask_rows(rows, &cfg, &[0u8; 32], &["别的库".to_string()]);
+        let (_, miss) = mask_rows(rows, &cfg, &[0u8; 32], &["别的库".to_string()], "", None);
         assert_eq!(miss, 0);
     }
 

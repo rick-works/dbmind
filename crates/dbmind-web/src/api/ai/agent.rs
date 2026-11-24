@@ -264,8 +264,10 @@ fn truncate(text: String) -> String {
 /// 把查询结果渲染成模型读得懂的紧凑文本（TSV 比 JSON 省一半 token）。
 ///
 /// 命中「字段脱敏」规则的列在这里打码：智能体自己 `select` 一次就能拿到真实行，
-/// 光给上下文里的样例值脱敏等于没脱。工具结果拿不到可靠表名（JOIN / 子查询别名都可能），
-/// 所以只应用「表为空 = 任意表」的规则 —— 钉了表的规则在这里不参与，
+/// 光给上下文里的样例值脱敏等于没脱。
+///
+/// `table` 是调用方从工具 SQL 保守解析出的单表名：单表 SELECT 能命中钉表规则，
+/// JOIN / 子查询等解析不出时传 None —— 只应用「表为空 = 任意表」的规则，
 /// 免得分不清是哪张表时把无关列也打成 `***`，反而让模型失明。
 fn render_rows(
     result: &dbmind_core::QueryResult,
@@ -273,6 +275,7 @@ fn render_rows(
     mask_key: &crate::api::ai::mask::MaskKey,
     conn: &str,
     database: &str,
+    table: Option<&str>,
 ) -> String {
     let names: Vec<String> = result.columns.iter().map(|column| column.name.clone()).collect();
     let mut out = names.join("\t");
@@ -288,7 +291,16 @@ fn render_rows(
                         other => other.to_string(),
                     };
                     match names.get(index).and_then(|name| {
-                        masks.method_for(crate::api::ai::mask::MaskChannel::Llm, conn, database, None, name)
+                        let hit = masks.method_for(
+                            crate::api::ai::mask::MaskChannel::Llm, conn, database, table, name);
+                        hit.or_else(|| {
+                            // Doris catalog 的 `catalog.库`：兼容按裸库名配的规则
+                            let (_, bare) = database.rsplit_once('.')?;
+                            if bare.is_empty() { None } else {
+                                masks.method_for(crate::api::ai::mask::MaskChannel::Llm,
+                                    conn, bare, table, name)
+                            }
+                        })
                     }) {
                         Some(method) => crate::api::ai::mask::mask_value(&text, method, mask_key),
                         None => text,
@@ -444,7 +456,8 @@ async fn execute_tool(
                     // 换来的好处是「用户刚在设置里改了规则，下一条工具结果立刻生效」。
                     let masks = crate::api::ai::mask::load(state).await;
                     let mask_key = crate::api::ai::mask::load_key(state, &masks).await;
-                    (true, render_rows(&result, &masks, &mask_key, conn, database))
+                    let table = dbmind_core::mask::single_table_of(sql);
+                    (true, render_rows(&result, &masks, &mask_key, conn, database, table.as_deref()))
                 }
                 Err(err) => (false, err.message),
             }
