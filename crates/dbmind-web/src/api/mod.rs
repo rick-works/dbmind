@@ -24,6 +24,7 @@
 
 pub mod ai;
 pub mod backup;
+pub mod catalog_scope;
 pub mod compare;
 pub mod conn;
 pub mod datagen;

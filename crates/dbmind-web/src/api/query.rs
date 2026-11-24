@@ -238,11 +238,26 @@ pub async fn execute(
     let dialect = crate::api::dialect::Dialect::new(record.kind());
     let (_, schema) = crate::api::meta::split_db_schema(&database, &dialect);
 
-    // 先切库（跨库浏览靠影子连接，见 `scope`），再确保驱动在位。
-    // 两条失败都把原因放进结果面板（与 SQL 出错同一处显示），而不是抛 503 让前端只说「请求失败」。
-    let target = match crate::api::scope::resolve(&state, &id, &database).await {
-        Ok(target) => target,
-        Err(err) => return Ok(Json(shape::query_failure_json(&err.message, 0))),
+    // 外部 catalog（Doris 的 clickhouse_catalog.oishi_ods 等）不能靠切库实现：
+    // JDBC URL 的 database 带点号握手就挂，裸名又会被解析成 internal 下的同名库。
+    // 这里先按「主连接 + 全限定表名」改写用户 SQL（与数据浏览同一口径）；命中后用主连接
+    // 执行，不进影子那条路。取不到表清单时就当普通库处理，保持原有行为。
+    let external = crate::api::catalog_scope::apply(
+        &state, &id, &database, dialect, sql.clone(),
+    )
+    .await;
+
+    // 命中外部 catalog：SQL 已改成全限定表名，必须在**主连接**上执行 —— 走影子会被
+    // scope 拒绝（正是截图那条报错），而且那样也切不到外部 catalog。
+    // 未命中：照旧 resolve 影子连接（跨库浏览）。
+    let (target, base_sql) = if let Some(rewritten) = external {
+        (id.clone(), rewritten)
+    } else {
+        let t = match crate::api::scope::resolve(&state, &id, &database).await {
+            Ok(target) => target,
+            Err(err) => return Ok(Json(shape::query_failure_json(&err.message, 0))),
+        };
+        (t, sql.clone())
     };
     if let Err(err) = crate::api::driver::ensure_for_connection(&state, &target).await {
         return Ok(Json(shape::query_failure_json(&err.message, 0)));
@@ -257,7 +272,6 @@ pub async fn execute(
     // 和驱动侧的解析都已经做完了。宽表、大表、尤其走 SSH 隧道时这一段是纯浪费。
     // 多要一行（`size + 1`）是为了保住 `truncated` 判定（见 shape::query_result_json
     // 的 hasMore/totalCount）：正好取到 size+1 行才说明「还有下一页」。
-    let base_sql = sql.clone();
     let bare = base_sql.trim().trim_end_matches(';').trim().to_string();
     // page/size 来自请求体没有上限，saturating 防乘法溢出（与 export.rs 同一纪律）
     let offset = page.saturating_sub(1).saturating_mul(size as u64);
