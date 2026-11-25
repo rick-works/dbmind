@@ -314,7 +314,10 @@
             @dragover="onTabsStripDragOver"
             @drop="onTabsStripDrop"
             @dragleave="onTabsStripDragLeave">
-        <div v-if="!conn && allConnections.length === 0" class="conn-empty">
+        <!-- 空态只在「既没连接、也没打开任何页签」时显示。
+             曾经只看连接数：没建数据源时点 AI 助手/知识库，openTab 把页签加进 tabs 了，
+             但 el-tabs 那支被 v-else 挡着永远不渲染 —— 表现就是「点了没反应」（真机反馈）。 -->
+        <div v-if="!tabs.length && !conn && allConnections.length === 0" class="conn-empty">
           <el-empty :description="$t('tree.noConnection')" :image-size="120" />
         </div>
         <!-- 无 tab 时直接展示引导页 -->

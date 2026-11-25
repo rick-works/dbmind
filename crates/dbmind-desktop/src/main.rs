@@ -536,7 +536,62 @@ async fn pick_path(
     picked.map(|p| p.to_string())
 }
 
+/// Windows 上把 WebView2 的用户数据目录钉到自己的可写目录（Linux 无 WebView2，仅 Windows 生效）。
+///
+/// 为什么要显式覆盖：Server 2012 R2 这类老系统上见过「窗口在、点几下就整个未响应、CPU≈0%」——
+/// WebView2 用它自己的默认 UserDataFolder 初始化，若该目录被第三方软件用系统级环境变量
+/// `WEBVIEW2_USER_DATA_FOLDER` 指到一个不可写/被占用的路径，就卡在系统层等 IO（不是 JS 死循环）。
+/// 之前 Xplore 在用户机器上定位过同类故障。这里无条件覆盖成 `~/.dbmind/webview`，
+/// 保证公司在机器上装的加速器/管理软件污染系统变量也不影响我们。
+fn ensure_webview_data_dir() {
+    #[cfg(windows)]
+    {
+        let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) else {
+            return;
+        };
+        let dir = std::path::PathBuf::from(home).join(".dbmind").join("webview");
+        if let Err(err) = std::fs::create_dir_all(&dir) {
+            append_shell_log(&format!("WebView2 数据目录创建失败: {err}"));
+            return;
+        }
+        std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", &dir);
+        append_shell_log(&format!("WebView2 数据目录: {}", dir.display()));
+    }
+}
+
+/// 老系统（Windows Server 2012 R2 / Win8 及更早，内部版本 < 10240）上 WebView2 的
+/// GPU 合成会卡死窗口：CPU≈0%、画面不动、点按钮像没反应（用户实测，加 --disable-gpu
+/// 后明显改善）。只对老系统关掉硬件加速，新系统保持原样的丝滑动画。
+fn ensure_webview_compat() {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::SystemInformation::GetVersion;
+        // GetVersion 低位字节 = 主版本，高位字节 = 次版本；第三个字 = 内部版本号。
+        // Server 2012 R2 = 6.3.9600；Win10 起 = 10.0.10240+。
+        let ver = unsafe { GetVersion() };
+        let major = ver & 0xff;
+        let build = (ver >> 16) & 0xffff;
+        let is_old = major < 10 || build < 10240;
+        if is_old {
+            std::env::set_var(
+                "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+                "--disable-gpu --disable-gpu-compositing",
+            );
+            append_shell_log(&format!(
+                "老系统 Windows {major}.{build} → WebView2 已禁用 GPU 合成"
+            ));
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = ();
+}
+
 fn main() {
+    // 必须在建窗口**之前**：WebView2 初始化时读这个环境变量，晚设无效。
+    // 也必须在 ensure_java 之前——后者可能起子进程，别让它继承到脏值。
+    ensure_webview_data_dir();
+    ensure_webview_compat();
+
     // 必须在起内核**之前**：这个选择是通过进程环境变量传给内核的
     ensure_java();
 

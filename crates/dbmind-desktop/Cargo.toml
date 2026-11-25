@@ -29,3 +29,7 @@ tauri-plugin-dialog = "2"
 # 刻意不用 tasklist / wmic / PowerShell：打包后的便携版里没有脚本，
 # 而这些外部工具在新系统上有的已弃用、有的行为不一致。
 sysinfo = "0.32"
+# 读 Windows 主版本/内部版本号：老系统（Server 2012 R2 = build 9600）上 WebView2 的
+# GPU 合成会卡死整个窗口（CPU≈0%，画面不动），对这类系统关掉硬件加速。
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_SystemInformation"] }

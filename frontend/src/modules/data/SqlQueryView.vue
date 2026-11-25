@@ -3208,7 +3208,10 @@ const HEAD_MAX_G = 10
 const applyHeadLv = (lv) => {
   const head = editorHeadEl.value
   if (!head) return
-  if (head.dataset.lv !== String(lv)) head.dataset.lv = String(lv)
+  // 级数没变就别碰 DOM：classList.toggle 即使值不变也可能让 RO 再报一次尺寸，
+  // 拖窗口时会自激成死循环（Server 2012 R2 上 WebView2 尤其明显）。
+  if (head.dataset.lv === String(lv)) return
+  head.dataset.lv = String(lv)
   head.querySelectorAll('[data-g]').forEach((el) => {
     el.classList.toggle('icon-only', Number(el.dataset.g) <= lv)
   })
@@ -3224,27 +3227,38 @@ const headOverflow = () => {
 const fitHeadActions = () => {
   const head = editorHeadEl.value
   if (!head || !head.offsetParent) return
-  let lv = 0
-  applyHeadLv(0)
-  // 从全文字开始逐级收，直到放得下（每次 apply 都同步重排，量得准）
-  while (headOverflow() && lv < HEAD_MAX_G) { lv += 1; applyHeadLv(lv) }
+  // 二分找「放得下」的最小级数。headOverflow 对 lv 单调（lv 越大按钮越窄），
+  // 最多 4 次 apply；原来从 0 逐级加到 10 要 11 次强制重排，拖窗口/点按钮时会卡死。
+  let lo = 0, hi = HEAD_MAX_G
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    applyHeadLv(mid)
+    if (headOverflow()) lo = mid + 1
+    else hi = mid
+  }
+  applyHeadLv(lo)
 }
 let headRo = null
+let headFitRaf = 0
+/** 拖窗口时 RO 每帧会报好几次；合并到 rAF，一帧只量一次，避免逐级重排把 UI 线程拖死 */
+const scheduleHeadFit = () => {
+  if (headFitRaf) return
+  headFitRaf = requestAnimationFrame(() => { headFitRaf = 0; fitHeadActions() })
+}
 onMounted(() => {
-  headRo = new ResizeObserver(() => fitHeadActions())
-  if (editorHeadEl.value) {
-    headRo.observe(editorHeadEl.value)
-    // 只观察 head 不够：新开页签/字体就绪时是**内容把宽度撑出溢出**，head 盒子宽度没变，
-    // RO 不触发 → 卡在旧级数，必须手动刷新才正常（真机反馈）。把操作组也纳入观察，
-    // 内容宽一变就重测。
-    const act = editorHeadEl.value.querySelector('.head-actions')
-    if (act) headRo.observe(act)
-  }
+  // 只观察容器 head 的宽度。绝不能再观察 .head-actions —— 它的宽度正是
+  // applyHeadLv 改 class 后的结果，观察它 = 改内容触发自己 = 拖窗口时无限自激。
+  // 内容变化（新页签/字体/按钮增减）由 dc-tab-change、fonts.ready、下面的 watch 兜底。
+  headRo = new ResizeObserver(() => scheduleHeadFit())
+  if (editorHeadEl.value) headRo.observe(editorHeadEl.value)
   nextTick(fitHeadActions)
   // 字体就绪后文字宽度会变（首帧用的是回退字体），再量一次
   if (document.fonts?.ready) document.fonts.ready.then(() => fitHeadActions()).catch(() => {})
 })
-onBeforeUnmount(() => { if (headRo) { headRo.disconnect(); headRo = null } })
+onBeforeUnmount(() => {
+  if (headRo) { headRo.disconnect(); headRo = null }
+  if (headFitRaf) { cancelAnimationFrame(headFitRaf); headFitRaf = 0 }
+})
 // 页签切换回来（display 从 none 到可见）也要重测：隐藏期间 offsetParent 为空会跳过量测
 window.addEventListener('dc-tab-change', onTabChangeFitHead)
 onBeforeUnmount(() => window.removeEventListener('dc-tab-change', onTabChangeFitHead))
