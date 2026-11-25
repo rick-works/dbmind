@@ -793,5 +793,10 @@
     "Smart Ask is now an installable plugin: the plugin catalog ships a \"Smart Ask\" package that, once installed and enabled, automatically applies its analysis guideline in the AI panel's ask mode — no skill selection or separate Run button needed.",
     "The privacy chain is now visible: preview masked values before exporting, preview exactly what will be sent to AI, and add masking rules through a template wizard. Grid copy and range selection now use masked values too, so what you paste matches what you see.",
     "Capabilities are upfront: the new-connection dialog shows what each data source can actually do, and the PDF export menu no longer pretends to work. A new config bundle page lets you export and import preferences and rules as one file (keys and passwords are never included)."
+  ],
+  "v2.2.4": [
+    "Windows Server 2012 R2 compatibility: automatically disable WebView2 GPU compositing on legacy systems (fixes the CPU≈0% frozen-window / stale-render issue), isolate the WebView2 data folder, and restore the missing top border line.",
+    "Knowledge base and AI assistant now open even when no data source exists — previously the empty-state page blocked tab rendering, so the buttons appeared dead.",
+    "Fixed a ResizeObserver feedback loop in the SQL editor toolbar: resizing the window or clicking buttons can no longer freeze the UI, and toolbar compression now uses binary search (4 reflows instead of up to 11)."
   ]
 }
