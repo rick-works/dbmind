@@ -9391,6 +9391,14 @@ const connTypeSummary = computed(() =>
    Chromium 内核，写上去会被当成"系统级拖动区"与那套三段式互相打架（实测拖不动），
    而它原本只是留给**已不在仓库里的 Electron 壳**用的 —— 留着弊大于利。 */
 .topbar.is-desktop { padding-right: 0; }
+/* Windows Server 上 decorations(false) 窗口的 DWM 只在左/右画蓝色系统边框，
+   顶栏贴到窗口最顶，上边缘看着「缺一条边」。补一条与系统边框同色的线衔接。
+   （不能写 ActiveBorder：Chromium 会解析成黑色，实测。） */
+.topbar.is-desktop::before {
+  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px;
+  background: #8ccceb;
+  z-index: 1; pointer-events: none;
+}
 /* macOS 的系统红绿灯按钮占着左上角，给品牌区让位 */
 /* macOS：窗口用 Overlay（见 dbmind-desktop/src/main.rs 的注释）—— 系统那三个红绿灯浮在
    顶栏上、**与菜单同一行**（用户要的就是这个：不要单独占一行）。
