@@ -1,6 +1,6 @@
 {
   "name": "dbmind-frontend",
-  "version": "2.2.5",
+  "version": "2.2.6",
   "private": true,
   "license": "Apache-2.0",
   "scripts": {

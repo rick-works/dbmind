@@ -803,5 +803,8 @@
     "Removed the extra blue line above the top bar on Windows Server 2012 R2, so the window border matches Windows 11 on all four sides.",
     "Fixed a possible freeze when resizing the window to a narrow width: top-bar fitting is now coalesced into one frame per resize and uses binary search to avoid repeated forced reflows.",
     "Hardened the AI composer toolbar against the same kind of resize freeze: its ResizeObserver now watches the outer container, compression uses binary search, and unchanged states are no longer written back to the DOM."
+  ],
+  "v2.2.6": [
+    "On Windows Server 2012 R2, the bright blue system border around the window is gone - replaced with the same thin dark line as Windows 11; edge dragging to resize still works."
   ]
 }
