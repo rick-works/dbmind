@@ -559,28 +559,32 @@ fn ensure_webview_data_dir() {
     }
 }
 
+/// 是否老系统（Windows Server 2012 R2 / Win8 及更早，内部版本 < 10240）。
+/// 两处要用同一个判据：WebView2 的 GPU 合成开关、窗口系统边框的处理。
+#[cfg(windows)]
+fn is_legacy_windows() -> bool {
+    use windows_sys::Win32::System::SystemInformation::GetVersion;
+    // GetVersion 低位字节 = 主版本，高位字节 = 次版本；第三个字 = 内部版本号。
+    // Server 2012 R2 = 6.3.9600；Win10 起 = 10.0.10240+。
+    let ver = unsafe { GetVersion() };
+    (ver & 0xff) < 10 || ((ver >> 16) & 0xffff) < 10240
+}
+#[cfg(not(windows))]
+fn is_legacy_windows() -> bool {
+    false
+}
+
 /// 老系统（Windows Server 2012 R2 / Win8 及更早，内部版本 < 10240）上 WebView2 的
 /// GPU 合成会卡死窗口：CPU≈0%、画面不动、点按钮像没反应（用户实测，加 --disable-gpu
 /// 后明显改善）。只对老系统关掉硬件加速，新系统保持原样的丝滑动画。
 fn ensure_webview_compat() {
     #[cfg(windows)]
-    {
-        use windows_sys::Win32::System::SystemInformation::GetVersion;
-        // GetVersion 低位字节 = 主版本，高位字节 = 次版本；第三个字 = 内部版本号。
-        // Server 2012 R2 = 6.3.9600；Win10 起 = 10.0.10240+。
-        let ver = unsafe { GetVersion() };
-        let major = ver & 0xff;
-        let build = (ver >> 16) & 0xffff;
-        let is_old = major < 10 || build < 10240;
-        if is_old {
-            std::env::set_var(
-                "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
-                "--disable-gpu --disable-gpu-compositing",
-            );
-            append_shell_log(&format!(
-                "老系统 Windows {major}.{build} → WebView2 已禁用 GPU 合成"
-            ));
-        }
+    if is_legacy_windows() {
+        std::env::set_var(
+            "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+            "--disable-gpu --disable-gpu-compositing",
+        );
+        append_shell_log("老系统 → WebView2 已禁用 GPU 合成");
     }
     #[cfg(not(windows))]
     let _ = ();
@@ -681,6 +685,23 @@ fn main() {
                 .hidden_title(true);
             #[cfg(not(target_os = "macos"))]
             let builder = builder.decorations(false);
+            // Windows 老系统（Server 2012 R2 / Win8）：去掉四周那圈亮蓝色系统边框。
+            // 根因不是前端样式，而是 tao 的「无边框 + 阴影」模拟：为了保留 DWM 阴影，
+            // 它给窗口留了原生 WS_THICKFRAME / WS_BORDER 的非客户区（左右下各一圈），
+            // WM_NCCALCSIZE 再把客户区铺满。新系统的 DWM 把这条带画成 1px 暗线，
+            // Server 2012 画成亮蓝粗框 —— 就是用户看到的那圈蓝边。
+            // shadow(false) 让 tao 不再走这套模拟，窗口成为真正的无边框窗口；
+            // 拖边缘缩放不受影响：tao 自己用 WM_NCHITTEST 实现，不依赖这些样式。
+            // 代价是没有阴影（老系统那圈本来也不是阴影，是实打实的边框）。
+            #[cfg(windows)]
+            let builder = if is_legacy_windows() {
+                append_shell_log("老系统 → 关闭无边框阴影模拟（去掉四周蓝色系统边框）");
+                builder
+                    .shadow(false)
+                    .initialization_script("window.__DBMIND_LEGACY_FRAME__ = true;")
+            } else {
+                builder
+            };
             // 关掉 Tauri 的原生拖放接管（wry/WebView2 默认开启，为它自己的文件拖放事件服务）：
             // 接管期间**页面收不到任何 HTML5 拖拽事件** —— 树里拖表名进 SQL 编辑器在浏览器里
             // 好好的、安装版里一动不动，根因就是它（2026-11-05 实测）。前端与 Rust 都没有

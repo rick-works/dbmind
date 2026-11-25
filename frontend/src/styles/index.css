@@ -276,6 +276,12 @@ html[data-theme="dark"] {
 
 html, body, #app { height: 100%; width: 100%; overflow: hidden; }
 
+/* Windows 老系统（Server 2012 R2 / Win8）的桌面壳关掉了无边框阴影模拟，
+   窗口成为真正的无边框、四周不再有任何系统线（见 main.rs 与 main.js 的
+   __DBMIND_LEGACY_FRAME__）。补一条 1px 暗线，与 Win11 的框线观感一致。
+   用 inset 阴影而不是 border：不占布局、不影响 100% 宽高，且不挡鼠标事件。 */
+body.dc-legacy-frame #app { box-shadow: inset 0 0 0 1px var(--dc-border); }
+
 /* AI 面板的下拉（Skills / 上下文 / 模型 / 知识库）都是 teleport 到 body 的浮层，
    组件里的 scoped 样式**够不着**它们，所以这几条只能放全局。
    上下文那一列带层级缩进、库名一长整块就很宽 —— 夹住宽度与高度：

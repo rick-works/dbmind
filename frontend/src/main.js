@@ -130,6 +130,14 @@ for (const store of [window.localStorage, window.sessionStorage]) {
   } catch (e) { /* 同上 */ }
 }
 
+// 桌面壳在 Windows 老系统（Server 2012 R2 / Win8）上会关掉无边框阴影模拟以去掉
+// 那圈亮蓝色系统边框（见 crates/dbmind-desktop/src/main.rs）。那样窗口就是真正的
+// 无边框，四周连 1px 线都没有；这里给 body 打标记，由全局样式补一条与 Win11
+// 同款的暗色细线。只由壳注入，浏览器版没有这个全局变量，观感不受影响。
+if (window.__DBMIND_LEGACY_FRAME__) {
+  document.body.classList.add('dc-legacy-frame')
+}
+
 const app = createApp(App)
 for (const comp of [
   ElAlert, ElAutocomplete, ElButton, ElButtonGroup, ElCheckbox, ElCheckboxGroup, ElDatePicker, ElDialog, ElDivider, ElDrawer,
