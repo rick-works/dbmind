@@ -1470,6 +1470,27 @@
     <h2 class="sec-title reveal" data-eyebrow="RELEASES">版本</h2>
 
     <div class="rel-timeline">
+      <!-- v2.2.5（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v2.2.5</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-11-25</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>Windows Server 2012 R2 上不再额外绘制顶栏浅蓝补边，窗口四周框线与 Win11 保持一致</b></li>
+            <li><b>修复顶栏菜单在拖窗口到窄尺寸时可能卡死：宽度自适应改为每帧合并计算 + 二分求档，减少强制重排</b></li>
+            <li><b>加固 AI 面板底部工具条的同类卡死风险：ResizeObserver 改为观察外层容器，压缩档位改二分且不再重复写 DOM</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://gitee.com/rick-works/dbmind/releases/tag/v2.2.5" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://gitee.com/rick-works/dbmind/releases/tag/v2.2.5" target="_blank" rel="noopener">下载 v2.2.5</a>
+          </div>
+        </div>
+      </article>
       <!-- v2.2.4（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -1477,7 +1498,6 @@
           <div class="rel-head">
             <span class="rel-ver">v2.2.4</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-11-25</span>
           </div>
           <ul class="rel-notes">

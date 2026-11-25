@@ -798,5 +798,10 @@
     "Windows Server 2012 R2 compatibility: automatically disable WebView2 GPU compositing on legacy systems (fixes the CPU≈0% frozen-window / stale-render issue), isolate the WebView2 data folder, and restore the missing top border line.",
     "Knowledge base and AI assistant now open even when no data source exists — previously the empty-state page blocked tab rendering, so the buttons appeared dead.",
     "Fixed a ResizeObserver feedback loop in the SQL editor toolbar: resizing the window or clicking buttons can no longer freeze the UI, and toolbar compression now uses binary search (4 reflows instead of up to 11)."
+  ],
+  "v2.2.5": [
+    "Removed the extra blue line above the top bar on Windows Server 2012 R2, so the window border matches Windows 11 on all four sides.",
+    "Fixed a possible freeze when resizing the window to a narrow width: top-bar fitting is now coalesced into one frame per resize and uses binary search to avoid repeated forced reflows.",
+    "Hardened the AI composer toolbar against the same kind of resize freeze: its ResizeObserver now watches the outer container, compression uses binary search, and unchanged states are no longer written back to the DOM."
   ]
 }
