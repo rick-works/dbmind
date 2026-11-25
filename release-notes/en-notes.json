@@ -788,5 +788,10 @@
     "The database dropdown on SQL script tabs now follows the same rule as the connection tree: the cache only makes the list appear instantly, while the backend always re-checks it. Switching databases or reopening a tab no longer shows a stale or mis-assembled list that disagrees with the tree.",
     "Doris external catalogs are now queryable: after picking a database under an external catalog such as clickhouse_catalog, table names in your SQL are automatically qualified as catalog.db.table and run on the main connection, instead of failing with a stated-unsupported error.",
     "The product promo video on the website is updated to the full 26-engine edition (v2.2.1 -> 26 engines, 2:15), with the poster and player page refreshed to match."
+  ],
+  "v2.2.3": [
+    "Smart Ask is now an installable plugin: the plugin catalog ships a \"Smart Ask\" package that, once installed and enabled, automatically applies its analysis guideline in the AI panel's ask mode — no skill selection or separate Run button needed.",
+    "The privacy chain is now visible: preview masked values before exporting, preview exactly what will be sent to AI, and add masking rules through a template wizard. Grid copy and range selection now use masked values too, so what you paste matches what you see.",
+    "Capabilities are upfront: the new-connection dialog shows what each data source can actually do, and the PDF export menu no longer pretends to work. A new config bundle page lets you export and import preferences and rules as one file (keys and passwords are never included)."
   ]
 }
