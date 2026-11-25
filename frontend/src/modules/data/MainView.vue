@@ -1321,21 +1321,42 @@ const topMenuPrimary = computed(() => topMenuVisible.value.slice(0, TOP_MENU_MAX
 const topMenuOverflow = computed(() => topMenuVisible.value.slice(TOP_MENU_MAX))
 
 // ===== 顶栏菜单小屏压缩：永远单行，放不下从右往左逐项收成纯图标（v-fast-tip 快速显示文字） =====
-// 实测驱动（nav.scrollWidth > clientWidth 即溢出），与 SQL 工具条同一套交互口径。
+// 用二分而不是逐级试：逐级法每次改 class 都会让 scrollWidth/clientWidth 重排，
+// Server 2012 R2 上 WebView2 的 DWM/合成链路慢，拖窗口时连续 resize 会把主线程拖死。
 const topNavEl = ref(null)
+let topNavFitRaf = 0
 const fitTopNav = () => {
   const nav = topNavEl.value
   if (!nav || !nav.offsetParent) return
   const items = [...nav.querySelectorAll('.top-menu-item')]
-  items.forEach(i => i.classList.remove('icon-only'))
-  let guard = 0
-  while (nav.scrollWidth > nav.clientWidth + 1 && guard++ <= items.length) {
-    const next = [...items].reverse().find(i => !i.classList.contains('icon-only'))
-    if (!next) break
-    next.classList.add('icon-only')
+  if (!items.length) return
+  const setIcon = (item, on) => {
+    if (item.classList.contains('icon-only') !== on) item.classList.toggle('icon-only', on)
   }
+  const allWide = () => { items.forEach(i => setIcon(i, false)) }
+  const apply = (count) => {
+    const iconCount = Math.max(0, Math.min(items.length, count))
+    items.forEach((item, idx) => setIcon(item, idx >= items.length - iconCount))
+  }
+  const fits = (count) => {
+    apply(count)
+    return nav.scrollWidth <= nav.clientWidth + 1
+  }
+  allWide()
+  if (fits(0)) return
+  let lo = 0
+  let hi = items.length
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2)
+    if (fits(mid)) hi = mid - 1
+    else lo = mid
+  }
+  apply(lo)
 }
-const onTopNavResize = () => fitTopNav()
+const onTopNavResize = () => {
+  if (topNavFitRaf) return
+  topNavFitRaf = requestAnimationFrame(() => { topNavFitRaf = 0; fitTopNav() })
+}
 // 「UI 设置没能写进后端」的统一提示（由 utils/settings.js 派发）。同一项 10 秒内只提示一次，
 // 免得连点开关时刷屏；本地缓存可能已生效，所以文案要说清「本次生效、重启可能回退」。
 const uiPersistWarnAt = new Map()
@@ -1353,14 +1374,15 @@ onMounted(() => {
   // 启动阶段（本组件还没挂上）就已经失败的这一次补报出来：事件发得比监听早，不补就永久丢了
   if (uiPersistError.value) onUiPersistFailed({ detail: uiPersistError.value })
   // 字体就绪后菜单文字宽度会变（首帧回退字体窄），重新量一次，否则溢出残留到手动刷新
-  if (document.fonts?.ready) document.fonts.ready.then(() => fitTopNav()).catch(() => {})
+  if (document.fonts?.ready) document.fonts.ready.then(() => onTopNavResize()).catch(() => {})
 })
 onBeforeUnmount(() => {
   window.removeEventListener('resize', onTopNavResize)
   window.removeEventListener('dbmind-ui-persist-failed', onUiPersistFailed)
+  if (topNavFitRaf) cancelAnimationFrame(topNavFitRaf)
 })
 // 菜单配置 / 语言切换会改条目数量与文字宽度，重新量一次
-watch([topMenuPrimary, () => locale.value], () => nextTick(fitTopNav))
+watch([topMenuPrimary, () => locale.value], () => nextTick(onTopNavResize))
 import { Reading, Delete as ElDelete } from '@element-plus/icons-vue'
 import AiMark from '../../common/AiMark.vue'
 // 顶栏右侧那组图标的统一出口（SVG + currentColor，深浅主题同一套资源）
@@ -9394,14 +9416,6 @@ const connTypeSummary = computed(() =>
    Chromium 内核，写上去会被当成"系统级拖动区"与那套三段式互相打架（实测拖不动），
    而它原本只是留给**已不在仓库里的 Electron 壳**用的 —— 留着弊大于利。 */
 .topbar.is-desktop { padding-right: 0; }
-/* Windows Server 上 decorations(false) 窗口的 DWM 只在左/右画蓝色系统边框，
-   顶栏贴到窗口最顶，上边缘看着「缺一条边」。补一条与系统边框同色的线衔接。
-   （不能写 ActiveBorder：Chromium 会解析成黑色，实测。） */
-.topbar.is-desktop::before {
-  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px;
-  background: #8ccceb;
-  z-index: 1; pointer-events: none;
-}
 /* macOS 的系统红绿灯按钮占着左上角，给品牌区让位 */
 /* macOS：窗口用 Overlay（见 dbmind-desktop/src/main.rs 的注释）—— 系统那三个红绿灯浮在
    顶栏上、**与菜单同一行**（用户要的就是这个：不要单独占一行）。

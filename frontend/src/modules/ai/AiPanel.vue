@@ -376,7 +376,7 @@
           </div>
 
           <!-- 输入域 + 工具条同属一个「框」，工具条贴在框内底部 -->
-          <div class="composer-box">
+          <div class="composer-box" ref="composerBoxEl">
             <!-- 选中的技能：**只有选了才出现**（默认什么都没选 = 自由对话）。
                  内置能力选中时显示当前那一个（× 回到自由对话）；插件技能可多个叠加 -->
             <div v-if="activeSkill || pickedSkills.length" class="picked-skills">
@@ -3649,12 +3649,18 @@ watch(() => props.active, (v) => { if (v) loadInboxData() })
 // 收级次序（data-g 越小越先收）：1 模型 → 2 知识库 → 3 聚焦表 → 4 数据源；
 // 深度思考/记事/自由对话是模式入口，不收。与 SQL 工具条同一套交互口径。
 const composerBarEl = ref(null)
+const composerBoxEl = ref(null)
 const COMPOSER_MAX_G = 7
+// 与 SQL 工具条同一套口径：观察外层稳定容器、rAF 合并、二分求最小收起级数。
+// Server 2012 R2 的 WebView2 合成链路很慢，逐级 class 切换 + 每轮 scrollWidth 强制重排
+// 会把拖窗口的每一帧拖成卡顿；级数不变时也不再碰 DOM，避免 RO 自激。
+let composerFitRaf = 0
 const applyComposerLv = (lv) => {
   const bar = composerBarEl.value
   if (!bar) return
   bar.querySelectorAll('[data-g]').forEach((el) => {
-    el.classList.toggle('icon-only', Number(el.dataset.g) <= lv)
+    const on = Number(el.dataset.g) <= lv
+    if (el.classList.contains('icon-only') !== on) el.classList.toggle('icon-only', on)
   })
 }
 const composerOverflow = () => {
@@ -3665,21 +3671,37 @@ const composerOverflow = () => {
 const fitComposerBar = () => {
   const bar = composerBarEl.value
   if (!bar || !bar.offsetParent) return
-  let lv = 0
+  const fits = (lv) => { applyComposerLv(lv); return !composerOverflow() }
   applyComposerLv(0)
-  while (composerOverflow() && lv < COMPOSER_MAX_G) { lv += 1; applyComposerLv(lv) }
+  if (fits(0)) return
+  let lo = 0
+  let hi = COMPOSER_MAX_G
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2)
+    if (fits(mid)) hi = mid - 1
+    else lo = mid
+  }
+  applyComposerLv(lo)
+}
+const scheduleComposerFit = () => {
+  if (composerFitRaf) return
+  composerFitRaf = requestAnimationFrame(() => { composerFitRaf = 0; fitComposerBar() })
 }
 let composerRo = null
 onMounted(() => {
-  composerRo = new ResizeObserver(() => fitComposerBar())
-  if (composerBarEl.value) composerRo.observe(composerBarEl.value)
+  composerRo = new ResizeObserver(scheduleComposerFit)
+  const target = composerBoxEl.value || composerBarEl.value
+  if (target) composerRo.observe(target)
   nextTick(fitComposerBar)
   // 字体就绪后 chip 文字宽度会变（首帧回退字体窄），重新量一次
-  if (document.fonts?.ready) document.fonts.ready.then(() => fitComposerBar()).catch(() => {})
+  if (document.fonts?.ready) document.fonts.ready.then(scheduleComposerFit).catch(() => {})
 })
-onBeforeUnmount(() => { if (composerRo) { composerRo.disconnect(); composerRo = null } })
+onBeforeUnmount(() => {
+  if (composerRo) { composerRo.disconnect(); composerRo = null }
+  if (composerFitRaf) cancelAnimationFrame(composerFitRaf)
+})
 // 文案宽度变化（语言、选中的库/模型名）也要重新量
-watch([currentModelLabel, kbScopeLabel, () => ctxTables.value.length, () => locale.value], () => nextTick(fitComposerBar))
+watch([currentModelLabel, kbScopeLabel, () => ctxTables.value.length, () => locale.value], () => nextTick(scheduleComposerFit))
 </script>
 
 <style scoped>
