@@ -2802,6 +2802,11 @@ const paletteOpen = ref(false)
 const MONITOR_TAB_PREFIX = 'monitor@'
 const openMonitor = () => {
   if (!currentConnId.value) { ElMessage.warning(t('mv.needConn')); return }
+  // 没接入实时监控的引擎（DB2 / Derby / H2 / Oracle 等）别让用户点进去看一句「不支持」：
+  // features 里 supportsMonitor 是唯一口径，老内核缺字段时按支持处理（featureOf 的约定）。
+  if (featureOf(currentConnId.value, 'supportsMonitor') === false) {
+    ElMessage.warning(t('mv.monitorUnsupported')); return
+  }
   const id = MONITOR_TAB_PREFIX + currentConnId.value
   const exist = tabs.value.find(t => t.id === id)
   if (exist) { exist.database = currentDb.value; activeTab.value = id; return }

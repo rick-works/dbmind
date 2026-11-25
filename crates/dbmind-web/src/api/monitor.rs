@@ -1072,6 +1072,9 @@ pub async fn overview(state: &AppState, id: &str, database: &str, key: &str) -> 
 
     Ok(Json(json!({
         "supported": true,
+        // 前端终止按钮此前读的 data.killSupported 没有任何后端来源，等于恒不显示。
+        // 口径直接由本方言的面板定义推导：有 killable 面板才给按钮。
+        "killSupported": plan.panels.iter().any(|p| p.killable),
         "database": database,
         "fetchedAt": chrono::Local::now().to_rfc3339(),
         "spec": {

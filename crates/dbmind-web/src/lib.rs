@@ -574,6 +574,54 @@ async fn put_setting(
     Ok(Json(json!({ "key": key, "value": value })))
 }
 
+/// 配置包：把 app_settings 导成可交接的文件。连接另有 `/api/connections/export`（含密文口令），
+/// 不塞进这里 —— 那是要单独保管的东西，跟界面偏好/脱敏规则不是一回事。
+#[derive(serde::Serialize)]
+struct ConfigBundle {
+    format: &'static str,
+    version: u32,
+    #[serde(rename = "exportedAt")]
+    exported_at: String,
+    settings: std::collections::BTreeMap<String, String>,
+}
+
+async fn export_config(State(state): State<AppState>) -> ApiResult {
+    let engine = state.engine();
+    let settings = blocking(move || engine.settings()).await?;
+    let bundle = ConfigBundle {
+        format: "dbmind-config",
+        version: 1,
+        exported_at: chrono::Local::now().to_rfc3339(),
+        settings: settings.into_iter().filter(|(k, _)| {
+            // AES 密钥是本机私有的：导出去等于把「可解回明文」的钥匙一起送人
+            k != "ai.maskKey"
+        }).collect(),
+    };
+    Ok(Json(serde_json::to_value(bundle).unwrap_or_default()))
+}
+
+#[derive(Deserialize)]
+struct ImportConfigBody {
+    settings: std::collections::BTreeMap<String, String>,
+}
+
+async fn import_config(
+    State(state): State<AppState>,
+    Json(body): Json<ImportConfigBody>,
+) -> ApiResult {
+    let mut imported = 0usize;
+    for (key, value) in body.settings {
+        if key == "ai.maskKey" { continue }
+        let engine = state.engine();
+        blocking(move || engine.set_setting(&key, &value)).await?;
+        imported += 1;
+    }
+    if let Some(store) = dbmind_core::global_store() {
+        let _ = store.insert_ai_audit("config", &format!("导入配置包：{imported} 项设置"));
+    }
+    Ok(Json(json!({ "imported": imported })))
+}
+
 /// 一键作废**所有**连接的结构缓存（设置页「查询」页签的「刷新结构缓存」）。
 #[derive(serde::Serialize)]
 struct ClearedSchema {
@@ -734,7 +782,9 @@ pub fn build_router(state: AppState, dist: Option<PathBuf>) -> Router {
         .route("/schema-cache", delete(clear_all_schema_cache))
         .route("/cache", get(cache_list).post(cache_clear))
         .route("/settings", get(list_settings))
-        .route("/settings/{key}", put(put_setting));
+        .route("/settings/{key}", put(put_setting))
+        .route("/config/export", get(export_config))
+        .route("/config/import", post(import_config));
 
     //上游兼容层独占 /api（原版前端一行不改地打过来）；
     // 内核原生契约挪到 /api/dbmind，避免同一个 URL 有两个实现。

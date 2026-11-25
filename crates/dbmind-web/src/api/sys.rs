@@ -71,6 +71,9 @@ pub async fn driver_types(State(state): State<AppState>) -> XResult<Json<Value>>
                 // 「实验 / 只读浏览」徽章与说明。取值只来自 YAML，build.rs 已在
                 // 编译期校验过白名单，这里原样透出即可。
                 "supportLevel": t.support_level,
+                // 能力矩阵前置：新建连接前就能看到这个类型支持什么，而不是连上之后
+                // 点菜单才发现不支持。Capabilities 自带 camelCase 序列化，原样透出。
+                "capabilities": t.capabilities,
             })
         })
         .collect();

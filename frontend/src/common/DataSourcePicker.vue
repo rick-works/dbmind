@@ -43,16 +43,40 @@
           <div v-if="!t.builtin && !isReady(t.code)" class="ds-card-badge" :title="$t('dsp.driverTip')">{{ $t('dsp.downloadDriver') }}</div>
           <div v-else-if="!t.builtin && isReady(t.code)" class="ds-card-badge ds-card-ready" :title="$t('dsp.driverDownloaded')">{{ $t('settings.driver.tagReady') }}</div>
         </div>
+        <!-- 待验证数据源：后端 exposed:false 的类型不会出现在清单里，这里给出可见入口，
+             让用户知道「不是产品不支持，而是还没拿到可真机验证的介质」。 -->
+        <div v-if="!keyword" class="ds-card ds-card-more" @click="moreVisible = true">
+          <div class="ds-more-ic"><el-icon :size="22"><QuestionFilled /></el-icon></div>
+          <div class="ds-card-info">
+            <div class="ds-card-name">{{ $t('dsp.moreTypes') }}</div>
+            <div class="ds-card-meta">{{ $t('dsp.moreTypesTip') }}</div>
+          </div>
+        </div>
       </div>
 
       <el-empty v-if="!filteredGroups.length" :description="$t('settings.driver.empty')" :image-size="90" />
     </div>
+
+    <el-dialog v-model="moreVisible" :title="$t('dsp.moreTypes')" width="min(560px, 92vw)"
+               append-to-body class="dsp-more-dialog">
+      <p class="dsp-more-desc">{{ $t('dsp.moreTypesDesc') }}</p>
+      <div class="dsp-more-list">
+        <div v-for="code in PENDING_TYPES" :key="code" class="dsp-more-item">
+          <DbLogo :type="code" :size="28" />
+          <span class="dsp-more-name">{{ code }}</span>
+          <el-tag size="small" type="info" effect="plain">{{ $t('dsp.unverified') }}</el-tag>
+        </div>
+      </div>
+      <template #footer>
+        <el-button size="small" @click="moreVisible = false">{{ $t('common.close') }}</el-button>
+      </template>
+    </el-dialog>
   </el-dialog>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
-import { Search, Coin, Document, Box, CirclePlus, DataAnalysis } from '@element-plus/icons-vue'
+import { Search, Coin, Document, Box, CirclePlus, DataAnalysis, QuestionFilled } from '@element-plus/icons-vue'
 import { getDriverTypes, getDriverStatus } from '../api'
 import DbLogo from './DbLogo.vue'
 import { t } from '../utils/i18n'
@@ -68,6 +92,11 @@ const props = defineProps({
   modelValue: Boolean
 })
 const emit = defineEmits(['update:modelValue', 'selected'])
+
+// 后端 /api/drivers/types 按 YAML exposed:false 过滤掉的类型：不是不支持，是还没拿到
+// 可真机验证的介质（商业授权 / 企业试用 / 绑硬件 License）。在选类型页给一个明确入口。
+const PENDING_TYPES = ['GAUSSDB', 'GOLDENDB', 'SELECTDB', 'UXDB']
+const moreVisible = ref(false)
 
 const types = ref([])
 const status = ref({})
@@ -243,4 +272,19 @@ const pick = (code) => {
   border: 1px solid var(--dc-warning-wash); border-radius: 6px; padding: 0 5px;
 }
 .ds-card-ready { color: var(--dc-accent); background: var(--dc-success-wash); border-color: var(--dc-success-wash); }
+/* 待验证入口：虚线卡片，和正式类型卡一眼能分开 */
+.ds-card-more { border-style: dashed; background: transparent; }
+.ds-card-more:hover { border-color: var(--dc-text-dim); background: var(--dc-bg-soft); }
+.ds-more-ic {
+  width: 46px; height: 46px; flex: none; display: inline-flex;
+  align-items: center; justify-content: center; border-radius: 12px;
+  color: var(--dc-text-dim); background: var(--dc-bg-hover);
+}
+.dsp-more-dialog .dsp-more-desc { margin: 0 0 14px; font-size: 13px; color: var(--dc-text-dim); line-height: 1.7; }
+.dsp-more-dialog .dsp-more-list { display: grid; gap: 8px; }
+.dsp-more-dialog .dsp-more-item {
+  display: flex; align-items: center; gap: 10px; padding: 9px 12px;
+  border: 1px solid var(--dc-bg-hover); border-radius: 8px; background: var(--dc-bg-soft);
+}
+.dsp-more-dialog .dsp-more-name { flex: 1; font-size: 13px; font-weight: 600; color: var(--dc-text); }
 </style>

@@ -235,15 +235,15 @@ fn validate(manifest: &Manifest, dir: &Path) -> XResult<()> {
             manifest.id
         )));
     }
-    if manifest.kind != "skill" {
+    if !matches!(manifest.kind.as_str(), "skill" | "ask") {
         return Err(XError::bad_request(format!(
-            "暂不支持的插件类型「{}」（当前只支持 skill）",
+            "暂不支持的插件类型「{}」（当前支持 skill / ask）",
             manifest.kind
         )));
     }
     let prompt = manifest.prompt.as_deref().unwrap_or("").trim();
     if prompt.is_empty() {
-        return Err(XError::bad_request("skill 插件必须声明 prompt 文件"));
+        return Err(XError::bad_request("插件必须声明 prompt 文件"));
     }
     if !dir.join(prompt).is_file() {
         return Err(XError::bad_request(format!("插件包里缺少提示词文件 {prompt}")));
@@ -753,6 +753,38 @@ fn display_name(manifest: &Manifest, lang: Option<&str>) -> String {
 }
 
 /// 把一个已装技能读成一段 system 文本：优先 `chatPrompt`，否则退回 `prompt` 并清洗占位符。
+/// 读一个已装插件的提示词（skill / ask 通用）。问数插件用它作为本轮问数的口径覆盖，
+/// 引擎本身仍然内置 —— 插件包里没有任何可执行文件。
+pub fn plugin_prompt_text(id: &str) -> Option<String> {
+    if !id_ok(id) || disabled_ids().contains(id) {
+        return None;
+    }
+    let dir = root().join(id);
+    if !dir.is_dir() {
+        return None;
+    }
+    let manifest = read_manifest(&dir).ok()?;
+    if !matches!(manifest.kind.as_str(), "skill" | "ask") {
+        return None;
+    }
+    skill_prompt_text(&dir, &manifest)
+}
+
+/// 所有已启用的问数插件提示词（名称, 正文）。问数入口不需要用户手动选：装了、启用了就生效。
+pub fn active_ask_plugins() -> Vec<(String, String)> {
+    let Ok(items) = scan() else { return Vec::new() };
+    let mut out = Vec::new();
+    let mut budget = MAX_SKILL_PROMPT_CHARS * 2;
+    for (manifest, dir, state) in items {
+        if manifest.kind != "ask" || state != "enabled" { continue; }
+        let Some(text) = skill_prompt_text(&dir, &manifest) else { continue; };
+        if text.len() > budget { break; }
+        budget -= text.len();
+        out.push((display_name(&manifest, None), text));
+    }
+    out
+}
+
 fn skill_prompt_text(dir: &Path, manifest: &Manifest) -> Option<String> {
     let chat_file = manifest
         .chat_prompt

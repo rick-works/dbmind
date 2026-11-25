@@ -251,8 +251,8 @@
                         <el-dropdown-item command="xlsx">
                           <el-icon class="skills-ic"><Grid /></el-icon><span class="skills-name">{{ $t('ai.fmtXlsx') }}</span>
                         </el-dropdown-item>
-                        <el-dropdown-item command="pdf">
-                          <el-icon class="skills-ic"><Notebook /></el-icon><span class="skills-name">{{ $t('ai.fmtPdf') }}</span>
+                        <el-dropdown-item command="pdf" disabled>
+                          <el-icon class="skills-ic"><Notebook /></el-icon><span class="skills-name" :title="$t('ai.pdfHint')">{{ $t('ai.fmtPdf') }}</span>
                         </el-dropdown-item>
                       </el-dropdown-menu>
                     </template>
@@ -614,6 +614,11 @@
                         :title="listening ? $t('ai.voiceStop') : $t('ai.voiceStart')" @click="toggleVoice">
                   <el-icon :size="14"><Microphone /></el-icon>
                 </button>
+                <!-- 发送前看一眼：内容、上下文、技能、脱敏状态一次说清（设置里可改成每次发送都弹） -->
+                <button class="voice-btn send-preview-btn" type="button"
+                        :title="$t('ai.sendPreview.title')" @click="openSendPreview">
+                  <el-icon :size="14"><View /></el-icon>
+                </button>
                 <!-- 生成中变「停止」键：点一下真掐断（流式/问数/深挖都挂在统一中断入口上）。
                      停止态用实心红底 + 白色方块（停止的通用符号），与发送态的蓝色明显区分 -->
                 <el-button type="primary" class="composer-run" :class="{ 'is-stop': generating }"
@@ -783,7 +788,12 @@
                     :database="ctxEffectiveDatabase" :mode="probeMode" @insert="onProbeInsert" />
 
     <!-- 「这次到底发给模型什么了」：左栏标题旁的记录图标唤出，只读内存快照 -->
-    <AiRequestLog v-model="reqLogOpen" />
+    <AiRequestLog v-model="reqLogOpen" @replay="onReqReplay" />
+    <!-- 发送前预览：与事后记录配套，让用户发之前也能看清内容 / 上下文 / 脱敏状态 -->
+    <AiSendPreview v-model="sendPreviewOpen" :question="sendPreviewQuestion"
+                   :connection-name="ctxConnName" :database="ctxEffectiveDatabase"
+                   :tables="ctxTables || []" :skills="currentSkills()"
+                   @confirm="confirmSendPreview" />
   </div>
 </template>
 
@@ -791,17 +801,18 @@
 import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount, watch, defineAsyncComponent, toRef } from 'vue'
 import { saveBlobAs } from '../../utils/useExportTask'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ChatDotRound, DocumentCopy, Close, Cpu, Notebook, Download, Grid, Search, Star, Aim, DataAnalysis, Folder, Loading, ArrowDown, ArrowLeft, ArrowRight, Select, Coin, Connection, Promotion, Switch, Plus, Edit, Collection, Microphone, Bell, Tickets, List, Delete, MagicStick } from '@element-plus/icons-vue'
+import { ChatDotRound, DocumentCopy, Close, Cpu, Notebook, Download, Grid, Search, Star, Aim, DataAnalysis, Folder, Loading, ArrowDown, ArrowLeft, ArrowRight, Select, Coin, Connection, Promotion, Switch, Plus, Edit, Collection, Microphone, Bell, Tickets, List, Delete, MagicStick, View } from '@element-plus/icons-vue'
 import AiMark from '../../common/AiMark.vue'
 import AiChangeCard from './AiChangeCard.vue'
 import AiToolDetail from './AiToolDetail.vue'
 import AiRequestLog from './AiRequestLog.vue'
+import AiSendPreview from './AiSendPreview.vue'
 import { aiChat, aiChatStream, aiDataDict, aiInsight, aiAskStream, aiWarmup, aiExportDoc, getAiConfig, listConnections, listDatabases, listSchemas, listTables, kbList, kbSearch,
   aiAgentStream, aiJobResumeStream, aiThreadList, aiThreadGet, aiThreadDelete, aiThreadTrim, aiThreadRename, aiMemoryList, aiMemoryAdd, aiMemoryDelete,
   aiMemoryDetach,
   aiChangeList, aiChangeAllow, aiChangeApprove, aiChangeConfirm, aiChangeApply, aiChangeUndo, aiChangeReject,
   aiChangeDelete, aiChangeClear,
-  aiJobList, aiJobDismiss, aiJobResume, listPlugins } from '../../api'
+  aiJobList, aiJobDismiss, aiJobResume, listPlugins, getSettings, putSetting } from '../../api'
 import KbIngestPanel from './KbIngestPanel.vue'
 import { renderMarkdown, extractCodeBlocks } from '../../utils/markdown'
 import { t, te, locale } from '../../utils/i18n'
@@ -2052,6 +2063,7 @@ const onPluginsChanged = () => loadPluginSkills(true)
 onMounted(() => {
   loadAiModels()
   loadPluginSkills(true)
+  loadSendPreviewSetting()
   window.addEventListener('dbmind-ai-changed', onAiChanged)
   window.addEventListener('dbmind-plugins-changed', onPluginsChanged)
 })
@@ -2168,6 +2180,8 @@ const runAskInChat = async (text) => {
         history: history.slice(-4),
         modelId: selectedModelId.value,
         lang: String(locale.value || '').startsWith('en') ? 'en' : 'zh',
+        // 选中的技能提示词同样作用于问数（后端 ask.rs 走 augment_system）
+        pluginSkills: pickedSkills.value.map(s => s.id),
       },
       (step) => {
         mergeStep(msg.askAnswer.steps, step)
@@ -3507,6 +3521,9 @@ const blobErrMsg = async (e) => {
  */
 const exportDoc = async (markdown, format, nameHint) => {
   if (!markdown || exporting.value) return
+  // PDF 后端尚未实现（doc.rs 明确返回 not_implemented）。菜单已置灰，这里再挡一层，
+  // 避免旧缓存/命令行直接触发时弹出难懂的后端错误文案。
+  if (format === 'pdf') { ElMessage.warning(t('ai.pdfHint')); return }
   exporting.value = format
   try {
     const title = nameHint || currentSkill.value.label
@@ -3548,15 +3565,58 @@ const canRun = computed(() => {
   return !!aiInput.value.trim()
 })
 
+/**
+ * 发送前内容预览：让用户真正看见「这次要给模型什么」。开关存 app_settings（不是
+ * localStorage —— 桌面壳端口会变，按 origin 隔离的偏好会莫名丢失）。
+ */
+const sendPreviewOpen = ref(false)
+const sendPreviewQuestion = ref('')
+const sendPreviewRequired = ref(false)
+let pendingSend = null
+const loadSendPreviewSetting = async () => {
+  try {
+    const all = await getSettings()
+    const v = all?.['ai.sendPreview']
+    sendPreviewRequired.value = v === true || v === 'true'
+  } catch (e) { /* 老内核没这个键，默认不拦 */ }
+}
+const openSendPreview = () => {
+  sendPreviewQuestion.value = aiInput.value.trim()
+  pendingSend = null
+  sendPreviewOpen.value = true
+}
+const confirmSendPreview = () => {
+  const fn = pendingSend
+  pendingSend = null
+  sendPreviewOpen.value = false
+  if (fn) fn()
+}
+/** 从「这次发给模型什么了」回放：把原问题填回输入框，用户改一词就能再问一次 */
+const onReqReplay = (text) => {
+  aiInput.value = String(text || '').trim()
+  reqLogOpen.value = false
+  nextTick(() => scrollBottom())
+}
+/** 发送前预览的公共闸门：没开开关就直接跑；开了就先给用户看一眼。 */
+const withSendPreview = (text, run) => {
+  if (!sendPreviewRequired.value) { run(); return }
+  sendPreviewQuestion.value = text
+  pendingSend = run
+  sendPreviewOpen.value = true
+}
+
 /** 统一执行：按当前 Skill 分派到对应实现 */
 const runSkill = async () => {
   if (!canRun.value) return
-  switch (tab.value) {
-    case 'chat':
-    case 'insight':
-    case 'dictionary':
-    case 'ask': await sendChat(); break
-  }
+  const text = aiInput.value.trim()
+  withSendPreview(text, () => {
+    switch (tab.value) {
+      case 'chat':
+      case 'insight':
+      case 'dictionary':
+      case 'ask': sendChat(); break
+    }
+  })
 }
 
 /**

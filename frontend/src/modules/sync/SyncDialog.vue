@@ -102,6 +102,12 @@
          展开后才列出该类对象。分组按**源库与目标库的能力**决定要不要画（见 visibleGroups）——
          源库没有这个概念（PG 没有 EVENT）、或目标库建不出来（目标不支持该对象 DDL）就不摆空架子。 -->
     <div class="panel obj-panel" v-if="step === 2 && src.connectionId && src.database" v-loading="objsLoading">
+      <!-- 外部 catalog（Doris 的 JDBC catalog）里的表只能查、不能搬：同步链路没有 catalog 维度，
+           直接灰掉整页并说清原因，比让用户勾完在点执行时失败强。 -->
+      <div v-if="externalSrcRef" class="obj-external-tip">
+        <el-icon :size="15"><QuestionFilled /></el-icon>
+        <span>{{ $t('sync.externalUnsupported') }}</span>
+      </div>
       <div class="panel-head">
         <span class="panel-title"><el-icon :size="14"><FolderOpened /></el-icon>{{ $t('sync.pickObjects') }}</span>
         <span class="panel-count">{{ $t('sync.selectedPrefix') }}<b>{{ totalSelected }}</b> / {{ $t('sync.selectedSuffix', { total: totalAvailable }) }}</span>
@@ -619,6 +625,16 @@ const srcSchemas = ref([])
 const tgtDbs = ref([])
 const tgtSchemas = ref([])
 const keyword = ref('')
+/**
+ * 外部 catalog 库判定（与后端 external_catalog_of 同口径）：库名是 `catalog.db` 且前缀非 internal。
+ * 同步请求（SyncRequest）没有 catalog 维度，搬这类表会失败；在进入选对象页之前就拦下。
+ */
+const externalSrcRef = computed(() => {
+  const name = String(src.value.database || '')
+  const dot = name.indexOf('.')
+  if (dot <= 0 || dot === name.length - 1) return false
+  return name.slice(0, dot).toLowerCase() !== 'internal'
+})
 /** 对象清单加载中（339 张表要 4 个接口，加载期间给个转圈，别让人以为列表是空的） */
 const objsLoading = ref(false)
 
@@ -709,6 +725,7 @@ const nextStep = async () => {
   if (step.value === 1) {
     if (!src.value.connectionId || !src.value.database) return ElMessage.warning(t('sync.pickSourceDb'))
     if (!tgt.value.connectionId || !tgt.value.database) return ElMessage.warning(t('sync.pickTargetDb'))
+    if (externalSrcRef.value) return ElMessage.warning(t('sync.externalUnsupported'))
     if (src.value.connectionId === tgt.value.connectionId && src.value.database === tgt.value.database) {
       return ElMessage.warning(t('sync.sameDb'))
     }
@@ -1561,7 +1578,8 @@ const loadSrcObjects = async () => {
   objsLoading.value = true
   try {
     try {
-      const tables = await listTables(connId, db)
+      // 外部 catalog 不加载对象（同步没有 catalog 维度，列出来也搬不动）
+      const tables = externalSrcRef.value ? [] : await listTables(connId, db)
       objState.table.list = tables.filter(t => (t.type || 'TABLE') === 'TABLE').map(t => t.name)
       objState.view.list = tables.filter(t => t.type === 'VIEW').map(t => t.name)
     } catch (e) { /* ignore */ }
@@ -2347,6 +2365,14 @@ onMounted(() => { if (props.modelValue) loadConnections() })
 /* ==================== 对象选择：卡片式分组下拉 ====================
    每一类对象是一张卡片（组头一行 + 可展开的对象网格），视觉上与「卡片」一致：
    圆角、独立描边、悬停微亮、展开时组头高亮。 */
+.obj-external-tip {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 12px; padding: 10px 12px;
+  border: 1px solid var(--dc-warn-border, #e6a23c);
+  border-radius: 8px; background: var(--dc-warn-wash, rgba(230,162,60,.08));
+  color: var(--dc-text); font-size: 13px;
+}
+.obj-external-tip .el-icon { color: var(--dc-warn, #e6a23c); flex: none; }
 .obj-toolbar {
   display: flex; align-items: center; gap: 8px;
   margin-bottom: 10px;

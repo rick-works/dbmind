@@ -29,6 +29,13 @@
     <el-alert v-if="supportLevel === 'experimental'" type="warning" :closable="false" show-icon
               :title="$t('cd.supportExpTitle')" :description="$t('cd.supportExpDesc')" class="lvl-alert" />
 
+    <!-- 能力矩阵前置：内核 TypeDescriptor.capabilities 原样透出，连上之前就知道能干什么 -->
+    <div v-if="capabilityList.length" class="cap-matrix">
+      <span class="cap-matrix-title">{{ $t('cd.capMatrix') }}</span>
+      <span v-for="c in capabilityList" :key="c.key" class="cap-chip" :class="c.on ? 'on' : 'off'"
+            :title="c.label + (c.on ? ' ✓' : ' ✗')">{{ c.on ? '✓' : '✗' }} {{ c.label }}</span>
+    </div>
+
     <el-tabs v-model="activeTab" class="conn-tabs">
       <!-- ============ 基本配置 ============ -->
       <el-tab-pane :label="$t('cd.tabBasic')" name="basic">
@@ -529,6 +536,19 @@ const supportLevelTip = computed(() => t(
   supportLevel.value === 'experimental' ? 'dsp.lvlExpTip'
     : supportLevel.value === 'browse' ? 'dsp.lvlBrowseTip'
       : supportLevel.value === 'full' ? 'dsp.lvlFullTip' : 'dsp.lvlOperateTip'))
+
+/** 能力矩阵：只列用户决策时真正在意的几项，老内核没有 capabilities 字段时整块不显示 */
+const CAP_ITEMS = [
+  ['queryExecution', 'cd.capQuery'], ['metadataBrowse', 'cd.capBrowse'],
+  ['tableDataEdit', 'cd.capDataEdit'], ['tableStructureEdit', 'cd.capStructEdit'],
+  ['dataTransfer', 'cd.capSync'], ['userAdmin', 'cd.capUser'],
+  ['diagram', 'cd.capEr'], ['sqlExplain', 'cd.capExplain']
+]
+const capabilityList = computed(() => {
+  const caps = currentType.value?.capabilities
+  if (!caps) return []
+  return CAP_ITEMS.map(([key, keyI18n]) => ({ key, label: t(keyI18n), on: caps[key] === true }))
+})
 
 // ---------- 类型专属连接选项（src/types/<type>.js 的 options） ----------
 // 值存在 form.opts 里，与「手填附加参数」（form.params）分开：
@@ -1086,6 +1106,19 @@ const importPastedParams = () => {
 .type-lvl.is-browse { color: var(--dc-text-dim); background: var(--dc-bg-hover); }
 .type-lvl.is-experimental { color: var(--dc-warning); background: var(--dc-warning-wash); }
 .type-lvl.is-full { color: var(--dc-accent); background: var(--dc-success-wash); }
+/* 能力矩阵：一行小徽章，勾/叉直接可读，连上之前就知道有没有这个函数 */
+.cap-matrix {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  margin: -2px 0 12px; padding: 8px 10px;
+  border: 1px solid var(--dc-bg-hover); border-radius: 8px; background: var(--dc-bg-soft);
+}
+.cap-matrix-title { font-size: 12px; color: var(--dc-text-dim); margin-right: 2px; }
+.cap-chip {
+  font-size: 11.5px; line-height: 18px; padding: 0 7px; border-radius: 9px; cursor: help;
+  border: 1px solid transparent;
+}
+.cap-chip.on { color: var(--dc-accent); background: var(--dc-success-wash); }
+.cap-chip.off { color: var(--dc-text-dim); background: var(--dc-bg-hover); }
 /* 提示条是 flex 子项：不写 flex:none 会被下压，描述第二行会被裁掉（实测） */
 .lvl-alert { flex: 0 0 auto; margin-bottom: 12px; }
 .lvl-alert :deep(.el-alert__description) { margin: 2px 0 0; line-height: 1.5; }

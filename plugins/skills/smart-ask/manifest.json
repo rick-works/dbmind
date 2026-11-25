@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "smart-ask",
+  "type": "ask",
+  "name": { "zh": "智能问数", "en": "Smart Ask" },
+  "version": "1.0.1",
+  "author": "DBMind",
+  "homepage": "https://www.dbmind.top/#plugins",
+  "description": {
+    "zh": "给智能问数加上经营分析口径：先明确时间范围与指标定义，优先用汇总表，结论必须带数字并说明口径。启用后在 AI 助手的问数里自动生效。",
+    "en": "Adds a business-analysis guideline to smart ask: pin down the time range and metric definitions first, prefer summary tables, and back every conclusion with numbers and its metric definition. Takes effect automatically in the AI panel's ask mode."
+  },
+  "icon": "📊",
+  "minAppVersion": "3.0.0",
+  "needsContext": false,
+  "prompt": "prompt.md"
+}

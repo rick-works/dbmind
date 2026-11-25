@@ -363,6 +363,11 @@
       <el-button size="small" type="primary" @click="insertGenSql">{{ $t('tdv.insertToEditor') }}</el-button>
     </template>
   </el-dialog>
+
+  <MaskPreviewDialog v-model="exportPreviewOpen" channel="export"
+                     :connection-id="props.conn?.id" :database="props.database" :table="props.table"
+                     :columns="exportPreviewColumns" :rows="exportPreviewRows"
+                     @confirm="confirmExport" />
 </template>
 
 <script setup>
@@ -393,7 +398,8 @@ import { quoteStyleOf } from '../../types'
 // 所以导入的通用版**改名**，只给筛选行用（筛选行是本地构造的，没有 _rid）。
 import { rowKey as stableRowKey } from '../../utils/rowKey'
 // 字段脱敏的「结果表格」出口：前端同算法打码，只改显示这一层
-import { ensureMaskConfig, peekMaskConfig, gridMethods, maskTextSync, maskTextAsync } from '../../utils/masking'
+import { ensureMaskConfig, peekMaskConfig, gridMethods, methodFor, maskTextSync, maskTextAsync } from '../../utils/masking'
+import MaskPreviewDialog from '../../common/MaskPreviewDialog.vue'
 
 const props = defineProps({ conn: Object, database: String, table: String, readOnly: Boolean })
 const emit = defineEmits(['update-table-rows', 'open-query', 'insert-sql'])
@@ -1587,9 +1593,18 @@ const copyCtx = (mode) => {
   }
 }
 
+/**
+ * 复制出去的值必须和界面上看到的一致：命中 grid 出口规则时给脱敏后的文本。
+ * 表格显示层早就在用 maskedCell，但复制以前一直取 row[col] 原文 —— 等于
+ * 「界面打了码，粘出去是明文」。就地编辑仍读原文（编辑要写回真实值），两者不冲突。
+ */
+const clipboardTextOf = (row, col, value) => {
+  const masked = maskedCell(value, col)
+  return masked !== null ? masked : (value == null ? '' : String(value))
+}
 const copyCell = (row, col) => {
   if (!row || !col) return
-  writeClipboard(row[col] == null ? '' : String(row[col]), '已复制单元格')
+  writeClipboard(clipboardTextOf(row, col, row[col]), '已复制单元格')
 }
 // 当前选区的 TSV 文本（Excel 可直接粘贴）：
 // 列选中 = 列名 + 该列所有可见行；行选中 = 所选行的全部可见列（选中标题行时才带列名）；否则 = 当前单元格
@@ -1599,7 +1614,7 @@ const selectionAsTsv = () => {
     const picked = cols.filter(c => selectedCols.value.has(c))
     if (!picked.length) return ''
     const lines = [picked.join('\t')]
-    for (const r of displayRows.value) lines.push(picked.map(c => r[c] == null ? '' : String(r[c])).join('\t'))
+    for (const r of displayRows.value) lines.push(picked.map(c => clipboardTextOf(r, c, r[c])).join('\t'))
     return lines.join('\n')
   }
   if (selectedSet.value.size || headerSelected.value) {
@@ -1607,13 +1622,12 @@ const selectionAsTsv = () => {
     const lines = []
     // 只有标题行被选中（点/拖左上角那格）才输出列名；单纯选数据行不带
     if (headerSelected.value) lines.push(cols.join('\t'))
-    for (const r of picked) lines.push(cols.map(c => r[c] == null ? '' : String(r[c])).join('\t'))
+    for (const r of picked) lines.push(cols.map(c => clipboardTextOf(r, c, r[c])).join('\t'))
     return lines.join('\n')
   }
   if (activeCell.value) {
     const { row, col } = activeCell.value
-    const v = row && col ? row[col] : null
-    return v == null ? '' : String(v)
+    return row && col ? clipboardTextOf(row, col, row[col]) : ''
   }
   return ''
 }
@@ -1939,7 +1953,8 @@ const cellTextAt = (r0, c0) => {
   if (r0 === 0) return visibleColumns.value[c0] || ''
   const hit = cellByGkey(r0, c0)
   if (!hit) return ''
-  return hit.row[hit.col] == null ? '' : String(hit.row[hit.col])
+  // 框选复制也走同一口径（valueAt 是复制专用回调，界面渲染不读它）
+  return clipboardTextOf(hit.row, hit.col, hit.row[hit.col])
 }
 const dispIdxOf = (row) => displayRows.value.indexOf(row)
 // 把活动单元格落到 (rIdx, cIdx)（displayRows 下标）；extend=true 时保持锚点扩展选区
@@ -3282,7 +3297,23 @@ const insertGenSql = () => {
   emit('insert-sql', sqlGenText.value)
   sqlGenOpen.value = false
 }
+/** 导出前脱敏预览：命中 export 出口规则时先给用户看一眼会导出去的内容 */
+const exportPreviewOpen = ref(false)
+let pendingExportCmd = ''
+const exportPreviewColumns = computed(() => visibleColumns.value || [])
+const exportPreviewRows = computed(() => (displayRows.value || []).slice(0, 5))
+const confirmExport = () => { if (pendingExportCmd) doExport(pendingExportCmd); pendingExportCmd = '' }
+
 const onExport = async (cmd) => {
+  const cfg = peekMaskConfig()
+  const hit = cfg?.export && exportPreviewColumns.value.some(c => methodFor('export', {
+    connectionId: props.conn?.id, database: props.database, table: props.table, column: c
+  }, cfg))
+  if (hit) { pendingExportCmd = cmd; exportPreviewOpen.value = true; return }
+  await doExport(cmd)
+}
+
+const doExport = async (cmd) => {
   const [scope, format] = String(cmd || '').split('-')
   if (!['csv', 'excel'].includes(format)) return
   if (!props.conn?.id || !props.table) { ElMessage.warning(t('qa.pickTableFirst')); return }

@@ -412,13 +412,51 @@
           <div class="actions mask-actions">
             <el-button :icon="Plus" @click="addMaskGroup">{{ $t('settings.mask.addGroup') }}</el-button>
             <el-button :icon="AiMark" @click="autoDetectMask">{{ $t('settings.mask.auto') }}</el-button>
+            <el-button :icon="Plus" @click="maskWizardOpen = true">{{ $t('settings.mask.wizard') }}</el-button>
             <el-button :icon="Refresh" @click="loadMaskRules">{{ $t('settings.mask.reload') }}</el-button>
+          </div>
+
+          <!-- 发送前预览开关：与 AI 面板共用 app_settings ai.sendPreview -->
+          <div class="mask-send-pref">
+            <el-switch v-model="sendPreviewRequired" @change="onSendPrefChange" />
+            <span>{{ $t('settings.mask.sendPreview') }}</span>
+            <span class="mask-send-pref-hint">{{ $t('settings.mask.sendPreviewHint') }}</span>
           </div>
 
           <div class="actions">
             <el-button type="primary" :loading="maskSaving" @click="saveMask">{{ $t('settings.mask.save') }}</el-button>
             <span v-if="maskSaved" class="mask-saved">{{ $t('settings.mask.saved') }}</span>
           </div>
+
+          <!-- 规则向导：选一个常见敏感字段模板，填范围即可生成规则 -->
+          <el-dialog v-model="maskWizardOpen" :title="$t('settings.mask.wizardTitle')"
+                     width="min(560px, 92vw)" append-to-body>
+            <el-form label-width="110px" size="small">
+              <el-form-item :label="$t('settings.mask.wizardTpl')">
+                <el-select v-model="maskWizard.template" class="wiz-full">
+                  <el-option v-for="tpl in MASK_TEMPLATES" :key="tpl.key" :label="$t(tpl.nameKey)" :value="tpl.key" />
+                </el-select>
+              </el-form-item>
+              <el-form-item :label="$t('settings.mask.anyConn')">
+                <ConnectionSelect v-model="maskWizard.connectionId" :connections="maskConnections"
+                                  :clearable="true" :width-min="170" :width-max="280"
+                                  :placeholder="$t('settings.mask.anyConn')" />
+              </el-form-item>
+              <el-form-item :label="$t('settings.mask.anyDb')">
+                <el-input v-model="maskWizard.database" :placeholder="$t('settings.mask.anyDb')" />
+              </el-form-item>
+              <el-form-item :label="$t('settings.mask.anyTable')">
+                <el-input v-model="maskWizard.table" :placeholder="$t('settings.mask.anyTable')" />
+              </el-form-item>
+              <el-form-item :label="$t('settings.mask.columnPh')">
+                <el-input v-model="maskWizard.column" :placeholder="MASK_TEMPLATES.find(x => x.key === maskWizard.template)?.column || ''" />
+              </el-form-item>
+            </el-form>
+            <template #footer>
+              <el-button size="small" @click="maskWizardOpen = false">{{ $t('common.cancel') }}</el-button>
+              <el-button size="small" type="primary" @click="applyMaskWizard">{{ $t('settings.mask.wizardAdd') }}</el-button>
+            </template>
+          </el-dialog>
         </div>
 
         <!-- 1. MCP 服务 -->
@@ -1275,6 +1313,18 @@
           </div>
         </div>
 
+        <!-- 配置包：团队之间交接偏好 / 脱敏规则，不含 AES 密钥与连接口令 -->
+        <div v-show="activeTab === 'config'" class="settings-panel">
+          <div class="panel-title">{{ $t('settings.config.title') }}</div>
+          <div class="panel-desc">{{ $t('settings.config.desc') }}</div>
+          <div class="config-actions">
+            <el-button :icon="Document" @click="doExportConfig">{{ $t('settings.config.export') }}</el-button>
+            <el-button :icon="FolderOpened" @click="triggerImportConfig">{{ $t('settings.config.import') }}</el-button>
+            <input ref="configFileRef" type="file" accept="application/json,.json" class="config-file" @change="onConfigFile" />
+          </div>
+          <div class="config-note">{{ $t('settings.config.note') }}</div>
+        </div>
+
         <!-- 9. 关于 -->
         <div v-show="activeTab === 'about'" class="settings-panel">
           <div class="about-hero">
@@ -1417,7 +1467,7 @@ import { getAppearance, saveAppearance, appearanceDefaults } from '../../utils/a
 // `LOCALES` 直接当语言选项用：它里面每个选项的 label 都写着自己的语言，不需要再包一层
 import { LOCALES as localeOptions, locale, setLocale, t } from '../../utils/i18n'
 import { formatSql, keywordCandidates, sqlKeywordPattern, ruleHasIndent } from '../../utils/sqlFormat'
-import { getAiConfig, saveAiConfig, aiChat, getPathSettings, savePathSettings, browseBackupDirs, getDriverMirror, saveDriverMirror, getDriverTypes, getDriverStatus, getDriverProgress, installDriver, uploadDriver, openLocalDir, getAiUsage, getSettings, putSetting, clearSchemaCache, clearHistory, getLegacyTls, saveLegacyTls, getCacheItems, clearCaches, listConnections, getLogs, clearLogs, getMaskRules, saveMaskRules, listDatabases, listSchemas, listTables, listColumns, getFeatures } from '../../api'
+import { getAiConfig, saveAiConfig, aiChat, getPathSettings, savePathSettings, browseBackupDirs, getDriverMirror, saveDriverMirror, getDriverTypes, getDriverStatus, getDriverProgress, installDriver, uploadDriver, openLocalDir, getAiUsage, getSettings, putSetting, exportConfig, importConfig, clearSchemaCache, clearHistory, getLegacyTls, saveLegacyTls, getCacheItems, clearCaches, listConnections, getLogs, clearLogs, getMaskRules, saveMaskRules, listDatabases, listSchemas, listTables, listColumns, getFeatures } from '../../api'
 // 表格里的打码用同一份配置（前端同算法）：设置页保存后顺手同步给 utils/masking 的缓存
 import { setMaskConfig as applyMaskRules } from '../../utils/masking'
 import { PAGE_SIZE_OPTIONS } from '../../utils/settings'
@@ -1491,6 +1541,7 @@ const tabs = [
   { key: 'paths', i18nKey: 'settings.tab.paths', icon: FolderOpened },
   { key: 'cache', i18nKey: 'settings.tab.cache', icon: Delete },
   { key: 'logs', i18nKey: 'settings.tab.logs', icon: Document },
+  { key: 'config', i18nKey: 'settings.tab.config', icon: FolderOpened },
   { key: 'about', i18nKey: 'settings.tab.about', icon: Monitor }
 ]
 
@@ -1624,6 +1675,7 @@ const themeResolved = ref(getResolvedTheme())
 let offThemeChange = null
 onMounted(() => {
   offThemeChange = onResolvedThemeChange((r) => { themeResolved.value = r })
+  loadSendPref()
 })
 onBeforeUnmount(() => {
   if (offThemeChange) offThemeChange()
@@ -2004,6 +2056,79 @@ const loadMaskRules = async () => {
   } catch (e) {
     ElMessage.error(t('settings.mask.msgLoadFailed', { detail: e?.message || String(e) }))
   }
+}
+
+/** 发送前预览：与 AiPanel 共用同一个 app_settings 键（localStorage 按端口隔离不可靠） */
+const sendPreviewRequired = ref(false)
+const loadSendPref = async () => {
+  try {
+    const all = await getSettings()
+    const v = all?.['ai.sendPreview']
+    sendPreviewRequired.value = v === true || v === 'true'
+  } catch (e) { /* 老内核没这个键，默认不拦 */ }
+}
+const onSendPrefChange = async (v) => {
+  try { await putSetting('ai.sendPreview', !!v) }
+  catch (e) { ElMessage.error(t('settings.mask.msgPrefFailed', { detail: e?.message || String(e) })) }
+}
+
+/** 规则向导：常见敏感字段的列名 / 算法模板，省得用户从零想起该打哪一列。 */
+const MASK_TEMPLATES = [
+  { key: 'phone', nameKey: 'settings.mask.tplPhone', column: 'phone', method: 'md5' },
+  { key: 'idcard', nameKey: 'settings.mask.tplIdcard', column: 'id_card', method: 'aes' },
+  { key: 'email', nameKey: 'settings.mask.tplEmail', column: 'email', method: 'md5' },
+  { key: 'name', nameKey: 'settings.mask.tplName', column: 'customer_name', method: 'last4' },
+  { key: 'amount', nameKey: 'settings.mask.tplAmount', column: 'amount', method: 'star' }
+]
+const maskWizardOpen = ref(false)
+const maskWizard = reactive({ template: 'phone', connectionId: '', database: '', table: '', column: '' })
+const applyMaskWizard = () => {
+  const tpl = MASK_TEMPLATES.find(x => x.key === maskWizard.template) || MASK_TEMPLATES[0]
+  const column = String(maskWizard.column || tpl.column).trim()
+  if (!column) { ElMessage.warning(t('settings.mask.wizardNeedColumn')); return }
+  let group = maskForm.value.groups.find(g =>
+    (g.connectionId || '') === maskWizard.connectionId && (g.database || '') === maskWizard.database)
+  if (!group) {
+    group = newMaskGroup({ connectionId: maskWizard.connectionId, database: maskWizard.database, rules: [] })
+    maskForm.value.groups.push(group)
+  }
+  group.rules.push(newMaskRule({
+    table: maskWizard.table, column, method: tpl.method, note: t(tpl.nameKey)
+  }))
+  maskWizardOpen.value = false
+  ElMessage.success(t('settings.mask.msgWizardAdded', { column }))
+}
+
+/** 配置包导出 / 导入（团队共享偏好与规则；密钥、连接口令都不在里面） */
+const configFileRef = ref(null)
+const doExportConfig = async () => {
+  try {
+    const data = await exportConfig()
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `dbmind-config-${new Date().toISOString().slice(0, 10)}.json`
+    document.body.appendChild(a); a.click(); a.remove()
+    URL.revokeObjectURL(url)
+    ElMessage.success(t('settings.config.exported'))
+  } catch (e) { ElMessage.error(e?.message || String(e)) }
+}
+const triggerImportConfig = () => configFileRef.value?.click()
+const onConfigFile = async (e) => {
+  const file = e.target?.files?.[0]
+  if (!file) return
+  try {
+    const data = JSON.parse(await file.text())
+    if (data?.format !== 'dbmind-config' || !data.settings || typeof data.settings !== 'object') {
+      throw new Error(t('settings.config.badFile'))
+    }
+    const res = await importConfig(data.settings)
+    ElMessage.success(t('settings.config.imported', { n: res?.imported || 0 }))
+    await loadSendPref()
+    await loadMaskRules()
+  } catch (err) { ElMessage.error(err?.message || String(err)) }
+  finally { e.target.value = '' }
 }
 
 const addMaskGroup = () => {
@@ -3857,6 +3982,22 @@ watch(visible, (v) => {
 }
 .mask-empty-icon { font-size: 22px; color: var(--dc-primary); opacity: .85; }
 .mask-actions { margin-top: 12px; }
+.mask-send-pref {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 12px 0 4px; padding: 9px 12px;
+  border: 1px solid var(--dc-bg-hover); border-radius: 8px; background: var(--dc-bg-soft);
+  font-size: 13px; color: var(--dc-text);
+}
+.mask-send-pref-hint { color: var(--dc-text-dim); font-size: 12px; }
+.wiz-full { width: 100%; }
+/* 配置包导入导出：两个按钮 + 隐藏的 file input */
+.config-actions { display: flex; gap: 10px; flex-wrap: wrap; margin: 14px 0 10px; }
+.config-file { display: none; }
+.config-note {
+  max-width: 760px; padding: 10px 12px; border-radius: 8px;
+  border: 1px solid var(--dc-bg-hover); background: var(--dc-bg-soft);
+  color: var(--dc-text-dim); font-size: 12.5px; line-height: 1.7;
+}
 /* AES 密钥：小标题 + 一行「输入框 + 复制 + 随机生成」 */
 .mask-key { margin: 0 0 14px; }
 .mask-key-title { font-size: 13px; color: var(--dc-text); margin-bottom: 6px; }

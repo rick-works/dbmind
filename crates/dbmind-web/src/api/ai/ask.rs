@@ -69,6 +69,13 @@ pub struct AskReq {
     /// 用户点名的表（界面里 @ 表 / 从表详情跳过来时给）
     #[serde(default)]
     pub tables: Vec<String>,
+    /// 对话里选中的插件技能 id：与普通对话 / 深度思考同一套 augment_system，
+    /// 技能提示词拼进 system 后仍持续影响这一问的 SQL 生成口径。
+    #[serde(default)]
+    pub plugin_skills: Vec<String>,
+    /// 插件中心安装的「问数插件」id：它的提示词作为本次问数的口径追加到 system。
+    #[serde(default)]
+    pub ask_plugin: Option<String>,
 }
 
 // ------------------------------------------------------------------ 提示词
@@ -1181,6 +1188,26 @@ async fn run_ask(state: AppState, req: AskReq, tracer: Tracer) -> XResult<Value>
         content: user_prompt(&schema.text, &question, &req.tables.join("、")),
     });
     let system = with_language(SYSTEM.to_string(), req.lang.as_deref());
+    // 问数插件：装了、启用了就自动生效（显式指定时只认那一个）。
+    // 插件只提供提示词口径，SQL 生成/执行仍走内置引擎。
+    let system = {
+        let parts: Vec<(String, String)> = match req.ask_plugin.as_deref() {
+            Some(pid) => crate::api::plugins::plugin_prompt_text(pid)
+                .map(|t| vec![(pid.to_string(), t)]).unwrap_or_default(),
+            None => crate::api::plugins::active_ask_plugins(),
+        };
+        if parts.is_empty() {
+            system
+        } else {
+            let body = parts.into_iter()
+                .map(|(name, text)| format!("### {name}\n{text}"))
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            format!("{system}\n\n【本轮问数插件口径】\n{body}\n在不违背上面硬性规则的前提下遵循这段口径。")
+        }
+    };
+    // 问数也走插件技能：选着技能从自由对话切到问数，口径不能凭空失效。
+    let system = crate::api::plugins::augment_system(system, &req.plugin_skills, req.lang.as_deref());
     config::audit("ask", &question);
     let (reply, usage) =
         crate::api::ai::run_blocking(move || config::chat_with_usage(&model, &system, &messages)).await?;

@@ -297,6 +297,9 @@ export const installUpdate = () => http.post('/api/update/install', null, { time
 export const dismissUpdate = () => http.post('/api/update/dismiss').then(r => r.data)
 export const putSetting = (key, value) =>
   http.put(`/api/dbmind/settings/${encodeURIComponent(key)}`, { value: String(value) }).then(r => r.data)
+// 配置包：导出全部 app_settings（不含 AES 密钥）/ 导入另一台机器的偏好与规则
+export const exportConfig = () => http.get('/api/dbmind/config/export').then(r => r.data)
+export const importConfig = (settings) => http.post('/api/dbmind/config/import', { settings }).then(r => r.data)
 // 一键作废**所有**连接的结构缓存（设置 → 查询 →「刷新结构缓存」）
 export const clearSchemaCache = () => http.delete('/api/dbmind/schema-cache').then(r => r.data)
 // 缓存页签：体量清单 + 勾选清理（清单与清理**同一个端点**，POST 即清理）
@@ -326,7 +329,7 @@ export const installPluginFile = (file) => {
 export const setPluginEnabled = (id, on) =>
   http.post(`/api/plugins/${encodeURIComponent(id)}/${on ? 'enable' : 'disable'}`).then(r => r.data)
 export const uninstallPlugin = (id) => http.delete(`/api/plugins/${encodeURIComponent(id)}`).then(r => r.data)
-// 技能没有独立的运行接口：它在 AI 对话里跟着选中项生效（后端 augment_system）
+// 技能在 AI 对话里跟着选中项生效（后端 augment_system）；ask 类型插件走 aiAsk({ askPlugin: id })
 
 // 数据库元数据（关系型）——按连接类型路由到数据源模块 /api/{module}
 export const getFeatures = async (id) => { const b = await baseOf(id); return http.get(`${b}/${id}/features`).then(r => r.data) }

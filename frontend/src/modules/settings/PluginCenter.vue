@@ -5,8 +5,8 @@
   官网托管插件包，产品内一键安装。第一版只收**声明式**内容（manifest + 提示词），
   插件不带任何可执行文件 —— 后端解压时按后缀白名单拦截（见 api/plugins.rs 文件头）。
 
-  技能**没有独立运行界面**：装好、启用后去 AI 助手的 Skills 里选中它，
-  提示词拼进 system 后每一轮提问都由它生效。这里只管装 / 卸 / 启停 / 升级。
+  插件**没有独立运行界面**：技能装好、启用后去 AI 助手的 Skills 里选中它；
+  ask 类型（智能问数）启用后在 AI 助手的问数里自动生效。这里只管装 / 卸 / 启停 / 升级。
 
   ## 两条安装路径
   1. 「可安装」列表来自官网 plugins/index.json（拉不到不算错误，显示离线提示）；
@@ -41,7 +41,7 @@
           <span class="plg-name" :title="p.id">{{ p.name }}</span>
           <span class="plg-ver">v{{ p.version }}</span>
         </div>
-        <div class="plg-meta">{{ p.author || $t('plg.unknownAuthor') }} · {{ $t('plg.typeSkill') }}</div>
+        <div class="plg-meta">{{ p.author || $t('plg.unknownAuthor') }} · {{ typeLabel(p.type) }}</div>
         <div class="plg-desc" :title="p.description">{{ p.description || '—' }}</div>
         <div class="plg-card-foot">
           <el-switch :model-value="p.state === 'enabled'" size="small" @change="(v) => toggle(p, v)" />
@@ -65,7 +65,7 @@
           <span class="plg-name" :title="c.id">{{ loName(c.name) }}</span>
           <span class="plg-ver">v{{ c.version }}</span>
         </div>
-        <div class="plg-meta">{{ c.author || $t('plg.unknownAuthor') }} · {{ $t('plg.typeSkill') }}</div>
+        <div class="plg-meta">{{ c.author || $t('plg.unknownAuthor') }} · {{ typeLabel(c.type) }}</div>
         <div class="plg-desc">{{ loName(c.description) }}</div>
         <div class="plg-card-foot">
           <span class="plg-gap" />
@@ -94,6 +94,8 @@ const installed = ref([])
 const catalog = ref([])
 const catalogError = ref('')
 const fileRef = ref(null)
+
+const typeLabel = (kind) => t(kind === 'ask' ? 'plg.typeAsk' : 'plg.typeSkill')
 
 /**
  * 官网索引里的 name / description 是 `{ zh, en }` 双语对象，已装插件的清单由后端本地化过、是字符串。

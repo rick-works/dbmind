@@ -154,6 +154,7 @@ import ConnectionSelect from '../../common/ConnectionSelect.vue'
 import ScopeIcon from '../../common/ScopeIcon.vue'
 import AskAnswer from './AskAnswer.vue'
 import { mergeStep } from './askSteps.js'
+import { panelState } from '../ai/panelState.js'
 import { listConnections, listDatabases, aiAskStream, aiAskExamples } from '../../api/index.js'
 
 const props = defineProps({
@@ -304,7 +305,11 @@ const ask = async (text) => {
   const history = historyFor()
   try {
     const res = await aiAskStream(
-      { connectionId: connId.value, database: database.value, question: q, history, lang: 'zh' },
+      {
+        connectionId: connId.value, database: database.value, question: q, history, lang: 'zh',
+        // AI 助手里挑的插件技能在独立问数页同样生效（技能作用域全场景一致）
+        pluginSkills: (panelState.studio.pickedSkills || []).map(s => s.id),
+      },
       (step) => {
         mergeStep(answer.answer.steps, step)
         scrollToBottom()

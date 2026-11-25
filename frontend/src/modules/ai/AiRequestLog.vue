@@ -65,6 +65,7 @@
 
     <template #footer>
       <span class="req-note">{{ $t('ai.reqNote') }}</span>
+      <el-button size="small" text :disabled="!cur || !askMsg" @click="replay">{{ $t('ai.reqReplay') }}</el-button>
       <el-button size="small" text :disabled="!cur" @click="copyAll">{{ $t('ai.reqCopy') }}</el-button>
       <el-button size="small" text @click="doClear">{{ $t('ai.reqClear') }}</el-button>
       <el-button size="small" @click="$emit('update:modelValue', false)">{{ $t('common.close') }}</el-button>
@@ -194,6 +195,13 @@ const loadLatest = async () => {
 }
 
 const toggle = (idx) => { expanded.value = { ...expanded.value, [idx]: !expanded.value[idx] } }
+
+/** 回放：把这次真正发出去的提问填回输入框，用户可以改一词再问一次。 */
+const replay = () => {
+  const text = askMsg.value?.content
+  if (!text) return
+  emit('replay', text)
+}
 
 const copyAll = async () => {
   if (!cur.value) return

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-11-18",
+  "updatedAt": "2026-11-25",
   "plugins": [
     {
       "id": "err-diagnose",
@@ -21,6 +21,26 @@
       "sha256": "effef3bc41ffaa2283087c16a017685d648534359377ea08b3325c376537d6b8",
       "size": 3860,
       "download": "https://www.dbmind.top/plugins/packages/err-diagnose-1.0.2.zip"
+    },
+    {
+      "id": "smart-ask",
+      "type": "ask",
+      "name": {
+        "zh": "智能问数",
+        "en": "Smart Ask"
+      },
+      "version": "1.0.1",
+      "author": "DBMind",
+      "description": {
+        "zh": "给智能问数加上经营分析口径：先明确时间范围与指标定义，优先用汇总表，结论必须带数字并说明口径。启用后在 AI 助手的问数里自动生效。",
+        "en": "Adds a business-analysis guideline to smart ask: pin down the time range and metric definitions first, prefer summary tables, and back every conclusion with numbers and its metric definition. Takes effect automatically in the AI panel's ask mode."
+      },
+      "icon": "📊",
+      "homepage": "https://www.dbmind.top/#plugins",
+      "needsContext": false,
+      "sha256": "c1e96cbde81919926dd4dc5122dd1008f5ac53d4a08c36b5d0ac3305e3205773",
+      "size": 2491,
+      "download": "https://www.dbmind.top/plugins/packages/smart-ask-1.0.1.zip"
     },
     {
       "id": "sql-explain",

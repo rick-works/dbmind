@@ -112,7 +112,12 @@ function ruleHits(rule, connectionId, database, table, column) {
 /** 某个出口的开关是否打开 */
 export function channelOn(channel, data = config) {
   if (!data) return false
-  return channel === 'mcp' ? data.mcp : channel === 'grid' ? data.grid : data.llm
+  // 四个出口必须各自独立：以前 export 落到 llm 分支，关掉「AI 上下文」却开着
+  // 「导出文件」时前端预览不打码，与后端 export 出口口径不一致。
+  if (channel === 'export') return data.export === true
+  if (channel === 'mcp') return data.mcp === true
+  if (channel === 'grid') return data.grid === true
+  return data.llm === true
 }
 
 /**
