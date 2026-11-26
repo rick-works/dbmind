@@ -60,12 +60,21 @@ pub const ORACLE_SCHEMAS: &str = "select username as name from all_users u \
      order by username";
 
 /// DB2 没有「库」这一层：schema 就是它的库（MCP 侧一直这么用）。
-pub const DB2_SCHEMAS: &str = "select schemaname as name from syscat.schemata order by schemaname";
+/// syscat.schemata.schemaname 是定长 CHAR（真机返回 'DB2LOW  ' 带尾空格），
+/// 不 trim 会让模式名带空格、点了查不到表。
+pub const DB2_SCHEMAS: &str =
+    "select trim(schemaname) as name from syscat.schemata order by schemaname";
 
 pub const H2_SCHEMAS: &str = "select schema_name as \"name\" from information_schema.schemata \
      where schema_name <> 'INFORMATION_SCHEMA' order by schema_name";
 
 pub const DERBY_SCHEMAS: &str = "select schemaname as name from sys.sysschemas order by schemaname";
+
+/// DuckDB 单文件库：模式清单在 information_schema.schemata（真机 main/information_schema/pg_catalog）。
+/// 真机上 attach 过的库会让同一模式出现多次（9 行里 main/pg_catalog/information_schema 各 3 次），
+/// 不去重会让前端模式下拉出现重复项。
+pub const DUCKDB_SCHEMAS: &str =
+    "select distinct schema_name as name from information_schema.schemata order by schema_name";
 
 /// 这种类型的「库」清单 SQL。`None` = 没有库这一层（SQLite / NoSQL）。
 pub fn databases_sql(kind: ConnectionKind) -> Option<&'static str> {
@@ -100,6 +109,7 @@ pub fn schemas_sql(kind: ConnectionKind) -> Option<&'static str> {
         "oracle" | "dm" => ORACLE_SCHEMAS,
         "h2" => H2_SCHEMAS,
         "derby" => DERBY_SCHEMAS,
+        "duckdb" => DUCKDB_SCHEMAS,
         _ => return None,
     })
 }

@@ -5,6 +5,22 @@ use super::*;
 use crate::api::dialect::{h2_user, is_h2_table_priv};
 
 impl DialectOps for Db2Ops {
+    fn is_schema_aware(&self) -> bool {
+        true
+    }
+
+    fn schemas_sql(&self) -> Option<&'static str> {
+        Some(dbmind_core::scope_sql::DB2_SCHEMAS)
+    }
+
+    fn tables_in_schema_sql(&self, schema: &str) -> Option<String> {
+        let s = schema.replace('\'', "''");
+        Some(format!(
+            "select tabname as name from syscat.tables \
+             where tabschema = '{s}' and type = 'T' order by tabname"
+        ))
+    }
+
     fn object_source(&self, object_type: &str, name: &str, _schema: Option<&str>) -> Meta {
         // syscat 里的 TEXT 列就是定义原文（视图/例程/触发器都有）
         let name_literal = self.literal(name);
@@ -498,6 +514,18 @@ impl DialectOps for H2Ops {
         Some(H2_SCHEMAS)
     }
 
+    fn is_schema_aware(&self) -> bool {
+        true
+    }
+
+    fn tables_in_schema_sql(&self, schema: &str) -> Option<String> {
+        let s = schema.replace('\'', "''");
+        Some(format!(
+            "select table_name as name from information_schema.tables \
+             where table_schema = '{s}' and table_type = 'BASE TABLE' order by table_name"
+        ))
+    }
+
     fn procedures(&self, _schema: Option<&str>) -> Meta {
         h2_procedures()
     }
@@ -606,6 +634,23 @@ impl DialectOps for H2Ops {
 }
 
 impl DialectOps for DerbyOps {
+    fn is_schema_aware(&self) -> bool {
+        true
+    }
+
+    fn schemas_sql(&self) -> Option<&'static str> {
+        Some(dbmind_core::scope_sql::DERBY_SCHEMAS)
+    }
+
+    fn tables_in_schema_sql(&self, schema: &str) -> Option<String> {
+        let s = schema.replace('\'', "''");
+        Some(format!(
+            "select t.tablename as name from sys.systables t \
+             join sys.sysschemas sc on t.schemaid = sc.schemaid \
+             where sc.schemaname = '{s}' and t.tabletype = 'T' order by t.tablename"
+        ))
+    }
+
     fn object_source(&self, object_type: &str, name: &str, _schema: Option<&str>) -> Meta {
         let name_literal = self.literal(name);
         match object_type {
@@ -747,6 +792,22 @@ impl DialectOps for DerbyOps {
 impl DialectOps for DuckDbOps {
     fn family(&self) -> &'static str {
         "duckdb"
+    }
+
+    fn is_schema_aware(&self) -> bool {
+        true
+    }
+
+    fn schemas_sql(&self) -> Option<&'static str> {
+        Some(dbmind_core::scope_sql::DUCKDB_SCHEMAS)
+    }
+
+    fn tables_in_schema_sql(&self, schema: &str) -> Option<String> {
+        let s = schema.replace('\'', "''");
+        Some(format!(
+            "select table_name as name from information_schema.tables \
+             where table_schema = '{s}' and table_type = 'BASE TABLE' order by table_name"
+        ))
     }
 
     fn edit_capabilities(&self) -> editor::EditCapabilities {

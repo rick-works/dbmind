@@ -1605,7 +1605,19 @@ mod tests {
         assert!(schemas(ConnectionKind::H2).contains("information_schema.schemata"));
         // MySQL 的「库」就是 schema，树上不请求这一层
         assert!(of(ConnectionKind::Mysql).schemas_sql().is_none());
-        assert!(of(ConnectionKind::Db2).schemas_sql().is_none());
+        // DB2/Derby/DuckDB/H2 确实有 schema 层（真机 syscat/sysschemas/information_schema），
+        // 这轮补齐了 Web 层能力，与 YAML traits.schemaAware 对齐
+        for kind in [
+            ConnectionKind::Db2,
+            ConnectionKind::Derby,
+            ConnectionKind::Duckdb,
+            ConnectionKind::H2,
+        ] {
+            assert!(of(kind).is_schema_aware(), "{kind:?} 应为 schema-aware");
+            assert!(of(kind).schemas_sql().is_some(), "{kind:?} 应有 schema 清单 SQL");
+            let t = of(kind).tables_in_schema_sql("s").unwrap_or_default();
+            assert!(t.contains("name"), "{kind:?} 的表清单应给出 name 列: {t}");
+        }
 
         // ---- schema 下的表 ----
         let tis = |kind: ConnectionKind| of(kind).tables_in_schema_sql("public").unwrap_or_default();
