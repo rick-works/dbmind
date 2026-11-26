@@ -1,5 +1,10 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v2.3.1": [
+    "Fixed PostgreSQL trigger backups: the generated DROP now includes the owning table, so restoring no longer fails with a syntax error.",
+    "Cross-database sync is more reliable: t/f, yes/no and on/off text now lands in boolean columns, Doris catalog-qualified names no longer miscount rows, Oracle and Dameng upserts no longer abort on a bad row, and cancelling a long task or losing an AI stream no longer leaks connections or burns tokens.",
+    "Added schema support for DB2, Derby, DuckDB and H2, so sync, compare and masking pages offer a schema selector like other databases; the schema declarations for ClickHouse, Doris and Databend were corrected to match what those engines really support, preventing MCP from splitting dotted database names."
+  ],
   "v2.2.0": [
     "The deep-thinking layout was redone: one rounded card per step, a tool call shows only its name and duration (click to see arguments and results), list-shaped results render as real tables, and the left rails are gone - risk / note / conclusion / next-step lines are four colour-coded callout cards",
     "AI replies can now be edited and copied: editing a question re-answers from that turn and drops the replaced answer, and every answer ends with the input / output tokens it consumed",

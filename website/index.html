@@ -1470,6 +1470,27 @@
     <h2 class="sec-title reveal" data-eyebrow="RELEASES">版本</h2>
 
     <div class="rel-timeline">
+      <!-- v2.3.1（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v2.3.1</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-11-27</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>修复 PG 触发器备份</b>：导出的删触发器语句现在带上所属表，还原时不再报语法错。</li>
+            <li><b>跨库同步更稳</b>：数据里的 t/f、yes/no、on/off 能正确写入布尔列；Doris 带 catalog 的库名不再数错行；Oracle/达梦的「存在就更新」批量写入不会再因个别脏行中断；长任务取消和 AI 流式回复断线时不再继续占用连接或白耗 token。</li>
+            <li><b>DB2 / Derby / DuckDB / H2 补齐模式支持：同步、对比、脱敏等页面能像其它库一样选「模式」；ClickHouse / Doris / Databend 的模式声明也按真实能力修正，避免 MCP 把带点的库名拆错。</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://gitee.com/rick-works/dbmind/releases/tag/v2.3.1" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://gitee.com/rick-works/dbmind/releases/tag/v2.3.1" target="_blank" rel="noopener">下载 v2.3.1</a>
+          </div>
+        </div>
+      </article>
       <!-- v2.3.0（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -1477,7 +1498,6 @@
           <div class="rel-head">
             <span class="rel-ver">v2.3.0</span>
             <span class="rel-tag tag-minor">小版本</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-11-26</span>
           </div>
           <ul class="rel-notes">
