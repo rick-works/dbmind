@@ -3328,6 +3328,9 @@ watch(visible, (v) => {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .topmenu-ic { margin-right: 4px; color: var(--dc-text-dim); }
+/* 「任务中心」是唯一的自绘 mask 图标（tasks.svg）：它的墨迹比 Element 线性图标满得多，
+   同为 13px 盒子时视觉上大一圈。只在本列表里缩到 11px，顶栏那枚尺寸不动（用户要求）。 */
+.topmenu-ic :deep(.nav-ic) { width: 11px; height: 11px; margin: 0; }
 .topmenu-ops { display: inline-flex; }
 .topmenu-ops .el-button + .el-button { margin-left: 2px; }
 /* 缓存清单：一行一项，名称靠左、体量靠右 */

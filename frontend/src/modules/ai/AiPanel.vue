@@ -368,7 +368,8 @@
                 @mouseenter="slashIndex = i"
                 @mousedown.prevent="pickSlash(c)"
               >
-                <el-icon class="slash-ic"><component :is="c.icon" /></el-icon>
+                <span v-if="typeof c.icon === 'string'" class="slash-ic slash-emoji">{{ c.icon }}</span>
+                <el-icon v-else class="slash-ic"><component :is="c.icon" /></el-icon>
                 <span class="slash-label">{{ c.label }}</span>
                 <span class="slash-desc">{{ c.desc }}</span>
               </div>
@@ -1486,12 +1487,13 @@ const slashCommands = computed(() => [
     key: 'tab:' + sk.key, label: sk.label, desc: TAB_DESC.value[sk.key] || '', icon: sk.icon,
     group: t('ai.builtinSkills'), action: 'tab', target: sk.key
   })),
+  // 插件图标用 manifest 里的 emoji（与 Skills 下拉一致），没配才退回 MagicStick
   ...askPlugins.value.map(p => ({
-    key: 'ask:' + p.id, label: p.name, desc: t('ai.pluginAskAutoTip'), icon: MagicStick,
+    key: 'ask:' + p.id, label: p.name, desc: t('ai.pluginAskAutoTip'), icon: p.icon || MagicStick,
     group: t('ai.pluginSkills'), action: 'ask', target: p.id
   })),
   ...pluginSkills.value.map(p => ({
-    key: 'plugin:' + p.id, label: p.name, desc: p.description || '', icon: MagicStick,
+    key: 'plugin:' + p.id, label: p.name, desc: p.description || '', icon: p.icon || MagicStick,
     group: t('ai.pluginSkills'), action: 'plugin', target: p.id
   }))
 ])
@@ -4369,6 +4371,11 @@ watch([currentModelLabel, kbScopeLabel, () => ctxTables.value.length, () => loca
 .slash-item.active { background: var(--dc-primary-wash); }
 .slash-ic { flex-shrink: 0; color: var(--dc-text-dim); }
 .slash-item.active .slash-ic { color: var(--dc-primary); }
+/* 插件技能的 emoji 图标：和 Element 线性图标同一格，别让 emoji 自身的行高把这一行撑歪 */
+.slash-ic.slash-emoji {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 14px; height: 14px; font-size: 12px; line-height: 1;
+}
 .slash-label { flex-shrink: 0; font-size: 13px; font-weight: 600; color: var(--dc-text); }
 .slash-desc {
   margin-left: auto; font-size: 12px; color: var(--dc-text-weak);
