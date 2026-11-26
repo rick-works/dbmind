@@ -933,8 +933,12 @@ const loadPluginSkills = async (force = false) => {
   try {
     const data = await listPlugins()
     const enabled = (data?.items || []).filter((p) => p.state === 'enabled')
-    pluginSkills.value = enabled.filter((p) => p.type === 'skill')
-    askPlugins.value = enabled.filter((p) => p.type === 'ask')
+    // 插件图标统一在数据层兜底：新插件只要 manifest 配了 icon，Skills 下拉 /
+    // 斜杠命令 / 已选 chip / 历史消息标签都会显示它；万一没配（老包 / 第三方包），
+    // 这里补 🧩，免得某个入口漏出来一个光秃秃的 MagicStick。
+    const withIcon = (p) => (p.icon ? p : { ...p, icon: '🧩' })
+    pluginSkills.value = enabled.filter((p) => p.type === 'skill').map(withIcon)
+    askPlugins.value = enabled.filter((p) => p.type === 'ask').map(withIcon)
     // 插件被卸载/停用后，把已选里的死项摘掉（否则会一直占着 chip、还继续拼 system）
     const alive = new Set(pluginSkills.value.map((p) => p.id))
     pickedSkills.value = pickedSkills.value.filter((s) => alive.has(s.id))
