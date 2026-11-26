@@ -548,6 +548,31 @@ struct SettingBody {
     value: String,
 }
 
+/// 设置写入前的统一校验：PUT 与「导入配置包」必须走同一套。
+/// 漏了导入这条路会让拼错的数值（解析失败回退 0 = 不限制写行数）绕过安全闸门。
+fn validate_setting(key: &str, value: &str) -> Result<(), ApiError> {
+    // 口令 AES 密钥是本机私有的：一旦被外部改写，历史连接口令就再也解不开
+    if key == dbmind_core::secret::KEY_SETTING || key == dbmind_core::mask::KEY_AES {
+        return Err(ApiError(DbMindError::new(
+            ErrorCode::QueryInvalid,
+            "该设置项是本机私有密钥，不允许修改",
+        )));
+    }
+    if key == dbmind_core::Store::KEY_MAX_WRITE_ROWS && value.trim().parse::<u64>().is_err() {
+        return Err(ApiError(DbMindError::new(
+            ErrorCode::QueryInvalid,
+            "写操作行数上限必须是非负整数",
+        )));
+    }
+    if key == dbmind_core::Store::KEY_LOG_LEVEL && !is_valid_log_level(value) {
+        return Err(ApiError(DbMindError::new(
+            ErrorCode::QueryInvalid,
+            "日志级别只支持 trace / debug / info / warn / error",
+        )));
+    }
+    Ok(())
+}
+
 async fn put_setting(
     State(state): State<AppState>,
     Path(key): Path<String>,
@@ -555,31 +580,7 @@ async fn put_setting(
 ) -> ApiResult {
     let engine = state.engine();
     let value = body.value;
-    // 口令 AES 密钥是本机私有的：一旦被外部改写，历史连接口令就再也解不开
-    // （Store.secret 是 OnceLock，本进程仍用旧密钥；重启后换新的 → 密文全废）。
-    // 配置导入已过滤它，这里再堵住直接 PUT 的口子。
-    if key == dbmind_core::secret::KEY_SETTING || key == dbmind_core::mask::KEY_AES {
-        return Err(ApiError(DbMindError::new(
-            ErrorCode::QueryInvalid,
-            "该设置项是本机私有密钥，不允许修改",
-        )));
-    }
-    // 数值型安全设置同样先校验：safety.maxWriteRows 解析失败会在读取时回退 0
-    //（0 = 不限制），一个拼错的值（"1,000" / "1000 "）会静默关掉写操作行数上限。
-    if key == dbmind_core::Store::KEY_MAX_WRITE_ROWS && value.trim().parse::<u64>().is_err() {
-        return Err(ApiError(DbMindError::new(
-            ErrorCode::QueryInvalid,
-            "写操作行数上限必须是非负整数",
-        )));
-    }
-    // 日志级别**先校验再落库**：值不合法当场拒绝，不让一个拼错的级别进了库
-    // 之后每次启动都被静默忽略（用户还以为生效了）
-    if key == dbmind_core::Store::KEY_LOG_LEVEL && !is_valid_log_level(&value) {
-        return Err(ApiError(DbMindError::new(
-            ErrorCode::QueryInvalid,
-            "日志级别只支持 trace / debug / info / warn / error",
-        )));
-    }
+    validate_setting(&key, &value)?;
     // 闭包会拿走所有权，故先复制一份给任务，原值留给响应
     let task_key = key.clone();
     let task_value = value.clone();
@@ -611,8 +612,7 @@ async fn export_config(State(state): State<AppState>) -> ApiResult {
         exported_at: chrono::Local::now().to_rfc3339(),
         settings: settings.into_iter().filter(|(k, _)| {
             // 本机私有密钥绝不导出：app.secretKey 是连接口令的 AES 密钥，
-            // ai.maskKey 是脱敏密钥 —— 导出去等于把「解回明文」的钥匙一起送人；
-            // 导入到另一台机器后旧密文全部解不开（重启才生效，更难排查）。
+            // ai.maskKey 是脱敏密钥 —— 导出去等于把「解回明文」的钥匙一起送人
             k != dbmind_core::secret::KEY_SETTING && k != dbmind_core::mask::KEY_AES
         }).collect(),
     };
@@ -631,9 +631,14 @@ async fn import_config(
     let mut imported = 0usize;
     for (key, value) in body.settings {
         // 与导出侧同样过滤：配置包里若被塞进本机私有密钥，绝不能写进库
-        if key == dbmind_core::secret::KEY_SETTING || key == dbmind_core::mask::KEY_AES { continue }
+        validate_setting(&key, &value)?;
         let engine = state.engine();
-        blocking(move || engine.set_setting(&key, &value)).await?;
+        let task_key = key.clone();
+        let task_value = value.clone();
+        blocking(move || engine.set_setting(&task_key, &task_value)).await?;
+        if key == dbmind_core::Store::KEY_LOG_LEVEL {
+            set_log_level(&value);
+        }
         imported += 1;
     }
     if let Some(store) = dbmind_core::global_store() {

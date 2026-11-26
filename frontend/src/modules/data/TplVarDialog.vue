@@ -51,8 +51,9 @@
     <template #footer>
       <el-button :icon="Plus" @click="addRow">{{ $t('sqlq.tplVarAdd') }}</el-button>
       <el-button @click="visible = false">{{ $t('common.cancel') }}</el-button>
-      <!-- 删光变量后必须还能保存：空列表要能写回后端，否则下次打开旧变量又回来了 -->
-      <el-button type="primary" :disabled="saving" :loading="saving" @click="save">{{ $t('common.save') }}</el-button>
+      <!-- 删光变量后必须还能保存：空列表要能写回后端，否则下次打开旧变量又回来了。
+           但库还没读出来时不能存 —— 那时 rows 是空的，点保存会把整个变量库清空。 -->
+      <el-button type="primary" :disabled="saving || loadingRows" :loading="saving" @click="save">{{ $t('common.save') }}</el-button>
     </template>
   </el-dialog>
 </template>
@@ -73,6 +74,7 @@ const visible = computed({
 
 const rows = ref([])
 const saving = ref(false)
+const loadingRows = ref(false)
 let loadToken = 0
 watch(visible, async (v) => {
   if (!v) return
@@ -80,7 +82,12 @@ watch(visible, async (v) => {
   // 编辑期间不动真身（取消不产生副作用）。ensureSqlVarStore 是异步的，期间用户可能
   // 已经点「添加变量」并输入了 —— 用 token 校验打开代次，避免回填把编辑覆盖掉。
   const token = ++loadToken
-  await ensureSqlVarStore()
+  loadingRows.value = true
+  try {
+    await ensureSqlVarStore()
+  } finally {
+    if (token === loadToken) loadingRows.value = false
+  }
   if (token !== loadToken || !visible.value) return
   rows.value = readTplVars().map((r) => ({ name: r.name || '', value: r.value || '', note: r.note || '', type: r.type || 'auto' }))
 })

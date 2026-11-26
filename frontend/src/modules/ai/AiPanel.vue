@@ -927,11 +927,15 @@ const askPlugins = ref([])
 const pickedSkills = toRef(_ps, 'pickedSkills')
 /** 上次拉清单的时刻：打开下拉会顺带刷新（刚装的插件要能马上看到），5 秒内不重复请求 */
 let pluginLoadedAt = 0
+let pluginLoadSeq = 0
 const loadPluginSkills = async (force = false) => {
   if (!force && Date.now() - pluginLoadedAt < 5000) return
-  pluginLoadedAt = Date.now()
+  const seq = ++pluginLoadSeq
   try {
     const data = await listPlugins()
+    // 安装/停用会触发强制刷新：慢的旧响应不能覆盖新清单和已选技能
+    if (seq !== pluginLoadSeq) return
+    pluginLoadedAt = Date.now()
     const enabled = (data?.items || []).filter((p) => p.state === 'enabled')
     // 插件图标统一在数据层兜底：新插件只要 manifest 配了 icon，Skills 下拉 /
     // 斜杠命令 / 已选 chip / 历史消息标签都会显示它；万一没配（老包 / 第三方包），
@@ -1048,11 +1052,13 @@ const loadTbItems = async () => {
   tbLoading.value = true
   try {
     const raw = await listTables(ctxConnId.value, ctxEffectiveDatabase.value)
+    // 请求期间用户切了连接/库：旧响应必须丢弃，否则勾选的会是旧库的表
+    if (tbKey.value !== key) return
     tbItems.value = (raw || [])
       .map(x => (typeof x === 'string' ? x : (x.name || x.table || '')))
       .filter(Boolean)
-  } catch { tbItems.value = [] }
-  tbLoading.value = false
+  } catch { if (tbKey.value === key) tbItems.value = [] }
+  finally { if (tbKey.value === key) tbLoading.value = false }
 }
 /** 表下拉展开/收起：关其它下拉 + 懒加载表清单（搜索词每次清空，重新找） */
 const onTbVisible = (visible) => {
@@ -1348,7 +1354,11 @@ const streaming = ref(false)
 /** 非流式请求（问数/深挖/字典/洞察）的进行中控制器：点停止时一并掐断 */
 let stopCtrl = null
 /** axios 的中断错误：各 catch 里要识别成「用户主动停」而不是当失败弹 ❌ */
-const isCanceled = (e) => e && (e.code === 'ERR_CANCELED' || e.name === 'CanceledError')
+const isCanceled = (e) => !!e && (
+  e.code === 'ERR_CANCELED' || e.name === 'CanceledError'
+  // agentSse 在用户主动停时抛的是本地化文本 Error，不是 axios 取消错误
+  || String(e.message || '').includes(t('api.generationStopped'))
+)
 /** 生成中（等待或流式输出）：主按钮切换为停止键 */
 const generating = computed(() => chatLoading.value || streaming.value)
 /** 点停止：能掐的都掐 —— 流式对话、问数流、以及挂在 signal 上的普通请求 */
@@ -2140,7 +2150,9 @@ onBeforeUnmount(() => {
   if (resizeCleanup) resizeCleanup()
   window.removeEventListener('dbmind-ai-changed', onAiChanged)
   window.removeEventListener('dbmind-plugins-changed', onPluginsChanged)
-  stopStream() // 卸载时中断进行中的流式请求，别让它在后台继续读
+  // 统一走停止入口：除普通 chat 流外，问数/字典/智能体走的是 stopCtrl（axios），
+  // 只停 streamCtrl 会在切走 studio 页签后继续烧 token、回调写已卸载组件。
+  stopGenerating()
 })
 
 /** 高级技能统一执行：表数据洞察（结果都是 Markdown，可直接导出文件）。

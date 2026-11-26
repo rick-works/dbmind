@@ -1769,13 +1769,12 @@ const applyPreset = (idx, p) => {
 
 /**
  * 提交给后端的载荷。
- *
- * <p>后端的模型列表按 Map&lt;String,String&gt; 接收，勾选框的布尔值要转成字符串再发，
- * 否则后端取值时会因为类型不是 String 直接抛错。
+ * 后端 config.rs 用 `as_bool()` 读 embedding —— 必须发布尔值；
+ * 早期发 'true'/'false' 字符串时 as_bool 恒失败，开关永远存成 false。
  */
 const payload = () => ({
   ...form.value,
-  models: (form.value.models || []).map(m => ({ ...m, embedding: m.embedding ? 'true' : 'false' }))
+  models: (form.value.models || []).map(m => ({ ...m, embedding: !!m.embedding }))
 })
 
 /** 恢复默认：清掉 AI 配置（模型清单会一起没了，所以先确认一次），确认后立即落盘 */
@@ -2130,8 +2129,14 @@ const onConfigFile = async (e) => {
     }
     const res = await importConfig(data.settings)
     ElMessage.success(t('settings.config.imported', { n: res?.imported || 0 }))
-    await loadSendPref()
-    await loadMaskRules()
+    // 配置包会写多类 app_settings：只重拉发送偏好/脱敏规则的话，其它表单还停在旧值，
+    // 用户随后点任意「保存」就会把旧值整表写回、覆盖刚导入的配置。全部重拉。
+    await Promise.all([
+      load(), loadPaths(), loadEditor(), loadQuery(), loadSafety(), loadMcp(),
+      loadCache(), loadDriverList(), loadNotify(), loadKnowledge(),
+      loadSendPref(), loadMaskRules()
+    ])
+    shortcutMap.value = loadShortcuts()
   } catch (err) { ElMessage.error(err?.message || String(err)) }
   finally { e.target.value = '' }
 }

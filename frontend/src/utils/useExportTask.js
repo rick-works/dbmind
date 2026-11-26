@@ -169,8 +169,12 @@ export async function saveGenerated({ filename, types, generate, title = '' }) {
   } catch (err) {
     return failSave(err)
   }
-  if (!blob) {
-    // 空内容不能静默：调用方按 ok===false 直接 return，用户点了导出却什么都没发生。
+  // 空内容不能静默：调用方按 ok===false 直接 return，用户点了导出却什么都没发生。
+  // new Blob([]) 是 truthy，光判 !blob 会写出 0 字节文件还提示「已保存」。
+  const empty = !blob
+    || (typeof blob.size === 'number' && blob.size === 0)
+    || (typeof blob === 'string' && !blob.length)
+  if (empty) {
     // failSave 自带明确提示（mv.saveFailed 带 {detail} 占位，不能直接 t）。
     return failSave(new Error('generate returned empty content'))
   }
@@ -326,18 +330,21 @@ export function useExportTask() {
   const startPolling = (connId, name, format, handle) => {
     if (timer) clearInterval(timer)
     pollFails = 0
-    timer = setInterval(async () => {
-      if (!taskId.value) return
+    const myTaskId = taskId.value
+    const myTimer = setInterval(async () => {
+      if (!taskId.value || timer !== myTimer || taskId.value !== myTaskId) return
       try {
-        const r = await exportTask(connId, taskId.value)
+        const r = await exportTask(connId, myTaskId)
+        // 请求飞行期间用户又发起一次导出：旧响应到得再晚也不能停新定时器 / 写新句柄
+        if (timer !== myTimer || taskId.value !== myTaskId) return
         pollFails = 0
         const finished = applyTaskSnapshot(state, r)
         if (finished) {
-          clearInterval(timer)
+          clearInterval(myTimer)
           timer = null
           // 终态写回任务中心记录（导出 / SQL 转存都在这里收尾）：
           // 关掉进度窗之后，任务中心那条记录也能立刻显示成功/失败与产物文件名
-          setBgTaskStatus(taskId.value, status.value, {
+          setBgTaskStatus(myTaskId, status.value, {
             status: status.value,
             message: message.value,
             phase: phase.value,
@@ -345,9 +352,10 @@ export function useExportTask() {
             logs: logs.value.map(l => l.text),
             elapsedMs: r.elapsedMs
           })
-          await finishExport(state, connId, taskId.value, name, format, handle)
+          await finishExport(state, connId, myTaskId, name, format, handle)
         }
       } catch (e) {
+        if (timer !== myTimer || taskId.value !== myTaskId) return
         pollFails += 1
         console.warn('[export] 进度轮询失败：', pollFails, e?.message || e)
         // 容忍偶发抖动（一次失败就报错会吓人），连续 3 次才判定为真的断了

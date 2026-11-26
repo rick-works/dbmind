@@ -43,8 +43,10 @@ const legacyGet = (key) => { try { return localStorage.getItem(key) } catch { re
 const legacyDel = (key) => { try { localStorage.removeItem(key) } catch { /* 存储不可用就算了 */ } }
 
 /** 把老 localStorage 里的数据搬进 dbmind.db（搬成功才删旧键，失败下次启动再试） */
-async function migrateLegacy () {
-  const lt = legacyGet(TPLVAR_LS)
+async function migrateLegacy (missingTpl = true, missingVals = true) {
+  // 只迁库里**缺失**的那一项：之前只缺 sql.varvalues 时也会把残留的旧
+  // localStorage 变量库写回，把用户新版变量库整份回退覆盖。
+  const lt = missingTpl ? legacyGet(TPLVAR_LS) : null
   if (lt !== null) {
     const list = parseList(lt)
     if (!list.length) {
@@ -54,7 +56,7 @@ async function migrateLegacy () {
       try { await putAppSetting(KEY_TPL, JSON.stringify(list)); legacyDel(TPLVAR_LS) } catch { /* 下次再来 */ }
     }
   }
-  const lv = legacyGet(VARVALS_LS)
+  const lv = missingVals ? legacyGet(VARVALS_LS) : null
   if (lv !== null) {
     const map = parseMap(lv)
     if (!Object.keys(map).length) {
@@ -82,7 +84,7 @@ export function ensureSqlVarStore () {
       if (hasV) varValues = parseMap(all[KEY_VALS])
       loaded = true
       // 库里还没这两项：从老 localStorage 迁移（首次升级的老用户）
-      if (!hasT || !hasV) await migrateLegacy()
+      if (!hasT || !hasV) await migrateLegacy(!hasT, !hasV)
     } catch { /* 后端未就绪：保持未 loaded，下次再试 */ } finally { loading = null }
     return { tplVars, varValues }
   })()

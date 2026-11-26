@@ -90,7 +90,11 @@ const fetch = async () => {
   }
 }
 
-watch(() => props.connId, () => { error.value = ''; data.value = null; prevQuestions = null; prevAt = 0; fetch() }, { immediate: true })
+const resetMonitor = () => { error.value = ''; data.value = null; prevQuestions = null; prevAt = 0 }
+watch(() => props.connId, () => { resetMonitor(); fetch() }, { immediate: true })
+// 同连接换库会复用同一个监控 tab（只改 exist.database）：库变了必须重新取数，
+// 否则界面还留着上一个库的会话/进程，终止操作也会打到旧库。
+watch(() => props.database, () => { resetMonitor(); fetch() })
 
 /** 连接名：按 connId 从连接列表解析，用于头部展示 */
 const connName = ref('')
@@ -294,28 +298,39 @@ const kill = async (row, sessionId) => {
   try {
     await ElMessageBox.confirm(t('mon.killConfirmBody', { id: sessionId, tip }), t('mon.killTitle'), { type: 'warning', confirmButtonText: t('mon.kill'), cancelButtonText: t('common.cancel') })
   } catch { return }
-  const r = await monitorKill(props.connId, props.database || undefined, sessionId)
-  if (r?.success) { ElMessage.success(tMsg(r.message) || t('mon.killed')); fetch() }
-  else ElMessage.error(r?.message || t('mon.killFailed'))
+  try {
+    const r = await monitorKill(props.connId, props.database || undefined, sessionId)
+    if (r?.success) { ElMessage.success(tMsg(r.message) || t('mon.killed')); fetch() }
+    else ElMessage.error(r?.message || t('mon.killFailed'))
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.message || e?.message || t('mon.killFailed'))
+  }
+}
+
+const legacyCopy = (value) => {
+  const ta = document.createElement('textarea')
+  ta.value = value
+  ta.style.position = 'fixed'
+  ta.style.opacity = '0'
+  document.body.appendChild(ta)
+  try {
+    ta.select()
+    if (!document.execCommand('copy')) throw new Error('execCommand copy failed')
+  } finally {
+    ta.remove() // execCommand 抛错也要摘掉，否则 body 里残留隐藏 textarea
+  }
 }
 
 const copyText = async (text) => {
   const value = String(text ?? '')
   // 桌面壳里页面是 http://127.0.0.1（安全上下文），但浏览器版走 http 时
-  // navigator.clipboard 不存在 —— 用 textarea + execCommand 兜底，别让复制悄悄失败。
+  // navigator.clipboard 不存在或 writeText 被拒 —— 都要用 execCommand 兜底。
   try {
     if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(value)
+      try { await navigator.clipboard.writeText(value) }
+      catch { legacyCopy(value) }
     } else {
-      const ta = document.createElement('textarea')
-      ta.value = value
-      ta.style.position = 'fixed'
-      ta.style.opacity = '0'
-      document.body.appendChild(ta)
-      ta.select()
-      const ok = document.execCommand('copy')
-      ta.remove()
-      if (!ok) throw new Error('execCommand copy failed')
+      legacyCopy(value)
     }
     ElMessage.success(t('sqlq.copied'))
   } catch { ElMessage.error(t('sqlq.copyFailed')) }

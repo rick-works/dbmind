@@ -583,7 +583,7 @@ fn extract_zip(bytes: &[u8], dest: &Path) -> XResult<()> {
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
         .map_err(|e| XError::bad_request(format!("不是合法的 zip 包：{e}")))?;
     for i in 0..archive.len() {
-        let mut entry = archive
+        let entry = archive
             .by_index(i)
             .map_err(|e| XError::bad_request(format!("读取 zip 条目失败：{e}")))?;
         let Some(rel) = entry.enclosed_name() else {
@@ -616,10 +616,20 @@ fn extract_zip(bytes: &[u8], dest: &Path) -> XResult<()> {
         if let Some(parent) = out.parent() {
             dbmind_core::paths::ensure_dir(parent)?;
         }
+        // 不能只信 entry.size()（central directory 里的声明值可伪造）：
+        // 用 take 卡住真实读取长度，超限立即报错，8 MB 的包就解不出 GB 级文件。
+        let name = entry.name().to_string(); // take() 会 move entry，先留下名字
         let mut buf = Vec::new();
         entry
+            .take(MAX_FILE_BYTES + 1)
             .read_to_end(&mut buf)
-            .map_err(|e| XError::bad_request(format!("解压「{}」失败：{e}", entry.name())))?;
+            .map_err(|e| XError::bad_request(format!("解压「{name}」失败：{e}")))?;
+        if buf.len() as u64 > MAX_FILE_BYTES {
+            return Err(XError::bad_request(format!(
+                "插件包里的「{name}」解压后超过 {} KB 上限",
+                MAX_FILE_BYTES / 1024
+            )));
+        }
         std::fs::write(&out, &buf)
             .map_err(|e| XError::internal(format!("写入「{}」失败：{e}", out.display())))?;
     }
@@ -660,14 +670,21 @@ fn peek_manifest_id(bytes: &[u8]) -> XResult<String> {
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
         .map_err(|e| XError::bad_request(format!("不是合法的 zip 包：{e}")))?;
     for i in 0..archive.len() {
-        let mut entry = archive
+        let entry = archive
             .by_index(i)
             .map_err(|e| XError::bad_request(format!("读取 zip 条目失败：{e}")))?;
         if entry.enclosed_name().map(|p| p.ends_with("manifest.json")).unwrap_or(false) {
-            let mut text = String::new();
+            // 与正式解压同一上限：manifest 也要卡真实读取长度，不能让它先撑爆内存
+            let mut buf = Vec::new();
             entry
-                .read_to_string(&mut text)
+                .take(MAX_FILE_BYTES + 1)
+                .read_to_end(&mut buf)
                 .map_err(|e| XError::bad_request(format!("读取 manifest.json 失败：{e}")))?;
+            if buf.len() as u64 > MAX_FILE_BYTES {
+                return Err(XError::bad_request("manifest.json 超过 2 MB 上限"));
+            }
+            let text = String::from_utf8(buf)
+                .map_err(|e| XError::bad_request(format!("manifest.json 不是合法 UTF-8：{e}")))?;
             let manifest: Manifest = serde_json::from_str(&text)
                 .map_err(|e| XError::bad_request(format!("manifest.json 不是合法 JSON：{e}")))?;
             if !id_ok(&manifest.id) {
@@ -690,6 +707,9 @@ pub async fn disable(AxPath(id): AxPath<String>) -> XResult<Json<Value>> {
 }
 
 fn set_enabled(id: &str, on: bool) -> XResult<Value> {
+    if !id_ok(id) {
+        return Err(XError::bad_request("插件 id 不合法"));
+    }
     let dir = root().join(id);
     if !dir.is_dir() {
         return Err(XError::bad_request(format!("插件「{id}」未安装")));

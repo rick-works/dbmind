@@ -434,17 +434,26 @@ pub fn single_table_of(sql: &str) -> Option<String> {
     // 分号只在结尾允许（多语句直接放弃）
     let core = text.trim_end_matches(';').trim();
     if core.contains(';') { return None }
-    // 只把换行/制表换成空格并转小写，**不合并连续空白** —— 长度与 core 保持一致，
-    // 下面 find(" from ") 拿到的字节偏移才能直接用来从 core 截原文（保留表名大小写）。
-    let low: String = core
-        .chars()
-        .map(|c| if c.is_whitespace() { ' ' } else { c.to_ascii_lowercase() })
-        .collect();
+    // 关键字扫描用「等长的小写+空白归一」副本，但**不能拿它的字节偏移去切 core**：
+    // 制表/全角空格等 Unicode 空白映射成单字节 ' ' 后字节长度会变，偏移就错位了
+    // （轻则截错位置、重则切在 UTF-8 字符中间触发 panic）。遍历时同步记下
+    // 原始 core 的字节偏移，用它截原文（保留表名大小写）。
+    let mut low = String::with_capacity(core.len());
+    // map[low 的字节下标] = 对应 core 的字节下标（一个归一化字符可能占多字节，逐字节映射）
+    let mut map: Vec<usize> = Vec::with_capacity(core.len() + 1);
+    for (off, c) in core.char_indices() {
+        let norm = if c.is_whitespace() { ' ' } else { c.to_ascii_lowercase() };
+        let start = low.len();
+        low.push(norm);
+        for _ in start..low.len() { map.push(off) }
+    }
+    map.push(core.len());
     if [" join ", " union ", " intersect ", " except ", " from ("].iter().any(|k| low.contains(k)) {
         return None;
     }
     let from = low.find(" from ")?;
-    let after = core[from + 6..].trim_start();
+    // find 返回字节偏移；" from " 是 6 个 ASCII 字节，map[from+6] 即 core 里对应起点
+    let after = core[map[from + 6]..].trim_start();
     if after.starts_with('(') { return None } // 表值函数
 
     // 读 FROM 后的标识符：裸名 / `x` / "x" / [x]，可带 1~2 段点号
@@ -522,6 +531,15 @@ mod tests {
         ] {
             assert_eq!(single_table_of(sql), None, "sql={sql}");
         }
+    }
+
+    #[test]
+    fn single_table_of_handles_multibyte_whitespace() {
+        // 制表符 / 中文注释里的全角空格：归一化副本的字节偏移与原文不同，
+        // 旧实现直接拿 find 的偏移切 core 会截错甚至 panic（回归测试）
+        assert_eq!(single_table_of("SELECT\t*\tFROM\torders").as_deref(), Some("orders"));
+        assert_eq!(single_table_of("select *\u{3000}from\u{3000}`demo`.`t1`").as_deref(), Some("t1"));
+        assert_eq!(single_table_of("select 名称 from 订单 where x=1").as_deref(), Some("订单"));
     }
 
     #[test]
