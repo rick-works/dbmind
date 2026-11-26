@@ -10331,6 +10331,10 @@ const connTypeSummary = computed(() =>
 .el-dropdown-menu__item .more-item-icon { display: inline-flex; align-items: center; justify-content: center; }
 .el-dropdown-menu__item .more-item-icon .nav-ic {
   display: block; width: 1em; height: 1em; font-size: inherit;
+  /* nav-ic 嵌在 el-icon 里会继承到 Element 的 margin-right:5px，
+     flex 居中时整块右移 2.5px —— 第一项比其余三项明显偏左（实测 x=258.5 vs 261）。
+     这里把 margin 清零，四个图标盒的 x 才完全一致。 */
+  margin: 0 !important;
   vertical-align: middle;
 }
 
