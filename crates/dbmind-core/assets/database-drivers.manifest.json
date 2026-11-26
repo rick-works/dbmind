@@ -740,6 +740,59 @@
       "typeCode": "DB2"
     },
     {
+      "agentKey": "saphana",
+      "capabilities": {
+        "dataTransfer": true,
+        "databaseCreate": false,
+        "diagram": true,
+        "driverManagement": true,
+        "fieldLineage": false,
+        "metadataBrowse": true,
+        "objectBrowser": true,
+        "objectSource": true,
+        "queryExecution": true,
+        "schemaSearch": true,
+        "sqlExplain": true,
+        "sqlFileExecution": true,
+        "tableDataEdit": true,
+        "tableImport": true,
+        "tableStructureEdit": false,
+        "userAdmin": false
+      },
+      "defaultPort": 30015,
+      "dialect": "SapHana",
+      "driverStoreOrder": 26,
+      "driverStoreVisible": true,
+      "exposed": true,
+      "jdbc": {
+        "artifact": "com.sap.cloud.db.jdbc:ngdbc:2.25.9",
+        "artifacts": [
+          "com.sap.cloud.db.jdbc:ngdbc:2.25.9"
+        ],
+        "driverClass": "com.sap.db.jdbc.Driver",
+        "urlTemplate": "jdbc:sap://{host}:{port}/?databaseName={database}"
+      },
+      "key": "saphana",
+      "label": "SAP HANA",
+      "localFile": false,
+      "maxConnections": 8,
+      "mcpMode": "bridge",
+      "metadataConnectionScoped": false,
+      "module": "saphana",
+      "order": 950,
+      "protocol": "sql",
+      "runtimeMode": "agent",
+      "rustVariant": "SapHana",
+      "singleConnectionPool": false,
+      "skipTcpProbe": false,
+      "supportLevel": "operate",
+      "traits": {
+        "schemaAware": true,
+        "singleDatabase": false
+      },
+      "typeCode": "SAPHANA"
+    },
+    {
       "agentKey": "dm",
       "capabilities": {
         "dataTransfer": true,

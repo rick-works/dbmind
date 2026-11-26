@@ -123,6 +123,7 @@ fn module_name(dialect: &str) -> Result<&'static str, String> {
         "Oracle" => "oracle",
         "SqlServer" => "sqlserver",
         "Db2" => "db2",
+        "SapHana" => "saphana",
         "H2" => "h2",
         "Derby" => "derby",
         "ClickHouse" => "clickhouse",

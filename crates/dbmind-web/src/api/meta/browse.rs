@@ -413,13 +413,37 @@ pub async fn tables(
                 // 不需要切库；而把 `internal.ods` 传下去会去建一条 database='internal.ods'
                 // 的影子连接 —— JDBC URL 变成 `.../internal.ods`，Doris 直接拒绝（实测 500）。
                 let result = run_meta_sql(&state, &id, "", sql, META_MAX_ROWS).await?;
-                let tables: Vec<Value> = rows_of(&result)
+                let rows = rows_of(&result);
+                // 降级：部分 JDBC catalog（实测 SAP HANA）的 information_schema.tables
+                // 在 Doris 2.1.8 上透传不全 —— schemata 能列 schema、tables 却 0 行，
+                // 树里就成"表 0"点不开。Doris 的 `show tables from catalog.db` 走另一套
+                // 元数据路径，对它有效（实验室用 MySQL catalog 实测两条都返回表）。
+                // 只在 information_schema 一条都没查到时兜底，正常 catalog 零回归。
+                let (source_rows, via_show) = if rows.is_empty() {
+                    match dialect.show_tables_in_catalog(catalog, db) {
+                        Meta::Sql(show_sql) => {
+                            // 降级失败也别把整个接口打挂：原路径已经拿到空清单，静默沿用。
+                            match run_meta_sql(&state, &id, "", show_sql, META_MAX_ROWS).await {
+                                Ok(showed) => (rows_of(&showed), true),
+                                Err(_) => (rows, false),
+                            }
+                        }
+                        _ => (rows, false),
+                    }
+                } else {
+                    (rows, false)
+                };
+                let tables: Vec<Value> = source_rows
                     .iter()
                     .map(|row| {
+                        // information_schema 路径有 name/type 两列；show tables 路径只有
+                        // 一列 `Tables_in_<库>`，名字得从第一列取（first_column_text 会
+                        // 先认 name、再退回首个值，正好两条路都兼容）。
+                        let name = if via_show { first_column_text(row) } else { text_ci(row, "name") };
                         let kind = text_ci(row, "type");
                         json!({
                             "schema": db,
-                            "name": text_ci(row, "name"),
+                            "name": name,
                             "type": if kind.to_ascii_uppercase().contains("VIEW") { "VIEW" } else { "TABLE" },
                             "comment": Value::Null,
                             // Doris 的 TABLE_ROWS 多是估算甚至 0，这里不猜：留空，

@@ -251,6 +251,22 @@ pub(crate) const DB2: EditCapabilities = EditCapabilities {
     collations_json: "",
 };
 
+/// SAP HANA：**没有真机验证过 ALTER**，先按只读给（supports_column_modify=false）。
+/// ddl_style 用专属值而非 generic：守门测试要求每个暴露类型显式表态，
+/// 这样将来要开放编辑时有人接手，而不是悄悄落进兜底。
+pub(crate) const SAPHANA: EditCapabilities = EditCapabilities {
+    ddl_style: "saphana",
+    quote_style: "DOUBLE",
+    supports_column_modify: false,
+    supports_comment: false,
+    supports_table_options: false,
+    supports_auto_increment: false,
+    supports_index_rebuild: false,
+    doris: false,
+    charsets: &[],
+    collations_json: "",
+};
+
 /// DuckDB：**没实测过 ALTER 就不声明**，先按 SQLite 的保守档给。建表语法与 pg 同族。
 pub(crate) const DUCKDB: EditCapabilities = EditCapabilities {
     ddl_style: "pg",
@@ -321,6 +337,12 @@ pub(crate) const H2_COLUMN_TYPES: &[&str] = &[
 
 pub(crate) const DB2_COLUMN_TYPES: &[&str] = &[
     "INTEGER", "BIGINT", "DECIMAL", "DOUBLE", "VARCHAR", "CLOB", "BLOB", "DATE", "TIMESTAMP",
+];
+
+pub(crate) const SAPHANA_COLUMN_TYPES: &[&str] = &[
+    "TINYINT", "SMALLINT", "INTEGER", "BIGINT", "DECIMAL", "REAL", "DOUBLE",
+    "VARCHAR", "NVARCHAR", "CHAR", "NCHAR", "TEXT", "NCLOB", "BLOB",
+    "DATE", "TIME", "TIMESTAMP", "BOOLEAN",
 ];
 
 pub(crate) const DERBY_COLUMN_TYPES: &[&str] = &[

@@ -917,6 +917,22 @@ impl Dialect {
         ))
     }
 
+    /// 外部 catalog 表清单的**降级**写法：`show tables from {catalog}.{库}`。
+    ///
+    /// 为什么需要：`tables_in_catalog` 依赖 Doris 把目标库的 `information_schema.tables`
+    /// 透传出来。MySQL/PG catalog 没问题，但部分 JDBC catalog（用户实测 SAP HANA：
+    /// `saphana_prod_catalog` 的 `schemata` 能列 schema，`tables` 却返回 0 行）在
+    /// Doris 2.1.8 上透传不全 —— 树里就显示"表 0"，点不开。
+    /// Doris 自己的 `show tables from catalog.db` 走的是另一套元数据路径（实测对 JDBC
+    /// catalog 有效），在 information_schema 空时用它兜底。
+    /// 结果集列名是 `Tables_in_<库>`（不固定），调用方按**第一列**取表名。
+    pub fn show_tables_in_catalog(&self, catalog: &str, database: &str) -> Meta {
+        if !self.catalog_level() || !is_plain_identifier(catalog) || !is_plain_identifier(database) {
+            return Meta::Absent;
+        }
+        Meta::Sql(format!("show tables from {catalog}.{database}"))
+    }
+
     /// `catalog.库` 形式的表选项（catalog 层级专用，列名规则同 `table_options`）。
     ///
     /// 为什么要单独一条：`table_options` 查的是**当前 catalog** 的 `information_schema`，
@@ -2824,6 +2840,27 @@ mod tests {
 
     fn qx(kind: ConnectionKind, name: &str) -> String {
         Dialect::new(kind).quote_exact(name)
+    }
+
+    /// 外部 catalog 表清单的 SHOW TABLES 降级：只有 catalog 层级方言（Doris）生成，
+    /// 名字按裸标识符拼（catalog/db 来自树节点，已由 is_plain_identifier 白名单挡注入）。
+    #[test]
+    fn 外部catalog表清单降级sql() {
+        let doris = Dialect::new(ConnectionKind::Doris);
+        match doris.show_tables_in_catalog("saphana_prod_catalog", "HANA_AS_BASE") {
+            Meta::Sql(sql) => assert_eq!(sql, "show tables from saphana_prod_catalog.HANA_AS_BASE"),
+            _ => panic!("expected Sql"),
+        }
+        // 非 catalog 层级方言（MySQL 等）不该有这条 SQL
+        assert!(matches!(
+            Dialect::new(ConnectionKind::Mysql).show_tables_in_catalog("cat", "db"),
+            Meta::Absent
+        ));
+        // 注入形状的名字必须拒绝
+        assert!(matches!(
+            doris.show_tables_in_catalog("cat;drop", "db"),
+            Meta::Absent
+        ));
     }
 
     /// `quote_exact` 只加引号、**不动大小写**：它服务的是目录元数据里的真实名字。

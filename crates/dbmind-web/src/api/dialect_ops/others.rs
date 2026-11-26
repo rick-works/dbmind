@@ -762,6 +762,76 @@ impl DialectOps for DuckDbOps {
     }
 }
 
+/// SAP HANA：标准 SQL + 双引号标识符（未加引号的标识符上折大写）。
+/// 系统目录在 `SYS` schema（SYS.SCHEMAS / SYS.TABLES / SYS.TABLE_COLUMNS）。
+/// 没有真机（实验室无 HANA 实例），只实现「能浏览、能查询」的最小面，
+/// 其余能力靠保守默认（编辑类一律 generic = 只读），不误开点了会报错的开关。
+impl DialectOps for SapHanaOps {
+    fn family(&self) -> &'static str {
+        "saphana"
+    }
+
+    fn folds_ident_upper(&self) -> bool {
+        true
+    }
+
+    fn column_type_names(&self) -> &'static [&'static str] {
+        editor::SAPHANA_COLUMN_TYPES
+    }
+
+    fn edit_capabilities(&self) -> editor::EditCapabilities {
+        editor::SAPHANA
+    }
+
+    fn schemas_sql(&self) -> Option<&'static str> {
+        Some("select schema_name from sys.schemas order by schema_name")
+    }
+
+    fn tables_in_schema_sql(&self, schema: &str) -> Option<String> {
+        let s = schema.replace('\'', "''");
+        Some(format!(
+            "select table_name as name, case when table_type like '%VIEW%' then 'VIEW' else 'TABLE' end as type \
+             from sys.tables where schema_name = '{s}' order by table_name"
+        ))
+    }
+
+    fn column_types_sql(&self, quoted: &str) -> Meta {
+        // 表名进 SYS.TABLE_COLUMNS 时用目录里的真实大小写：HANA 的 TABLE_NAME 是大写，
+        // 用户手写的表名可能是混合大小写 —— 双向 upper 比对最稳。
+        Meta::Sql(format!(
+            "select column_name as column_name, \
+             case when data_type_name in ('NVARCHAR','VARCHAR','CHAR','NCHAR') \
+                  then lower(data_type_name) || '(' || length || ')' \
+                  when data_type_name in ('DECIMAL','DEC') \
+                  then lower(data_type_name) || '(' || length || ',' || scale || ')' \
+                  else lower(data_type_name) end as type_text, \
+             coalesce(comments, '') as comment \
+             from sys.table_columns where upper(table_name) = upper({quoted}) \
+             order by position"
+        ))
+    }
+
+    fn table_comments_sql(&self, quoted: &str) -> Meta {
+        Meta::Sql(format!(
+            "select column_name as column_name, coalesce(comments, '') as comment \
+             from sys.table_columns where upper(table_name) = upper({quoted})"
+        ))
+    }
+
+    fn table_action(&self, table: &str, action: &str, new_name: Option<&str>) -> Meta {
+        let t = self.quote(table);
+        match action {
+            "clear" | "truncate" => Meta::Sql(format!("truncate table {t}")),
+            "drop" => Meta::Sql(format!("drop table {t}")),
+            "rename" => match new_name {
+                Some(n) => Meta::Sql(format!("rename table {t} to {}", self.quote(n))),
+                None => Meta::Unwritten,
+            },
+            _ => Meta::Unwritten,
+        }
+    }
+}
+
 impl DialectOps for NoSqlOps {
     fn family(&self) -> &'static str {
         "nosql"

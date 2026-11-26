@@ -994,6 +994,9 @@ pub struct SqlServerOps;
 /// DB2：不吃 `limit`（SQLCODE=-104），`truncate` 必须显式 `immediate`。
 pub struct Db2Ops;
 
+/// SAP HANA：标准 SQL + 双引号标识符，系统目录在 SYS schema。
+pub struct SapHanaOps;
+
 /// SQLite：没有 `TRUNCATE`，`on conflict do update` 可用。
 pub struct SqliteOps;
 
@@ -1033,6 +1036,7 @@ static ORACLE: OracleOps = OracleOps;
 static DM: DmOps = DmOps;
 static SQLSERVER: SqlServerOps = SqlServerOps;
 static DB2: Db2Ops = Db2Ops;
+static SAPHANA: SapHanaOps = SapHanaOps;
 static SQLITE: SqliteOps = SqliteOps;
 static H2: H2Ops = H2Ops;
 static DERBY: DerbyOps = DerbyOps;
@@ -1072,6 +1076,7 @@ pub fn of(kind: ConnectionKind) -> &'static dyn DialectOps {
         },
         "SqlServer" => &SQLSERVER,
         "Db2" => &DB2,
+        "SapHana" => &SAPHANA,
         "ClickHouse" => &CLICKHOUSE,
         "SQLite" => &SQLITE,
         "H2" => &H2,

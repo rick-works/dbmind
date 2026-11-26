@@ -1303,7 +1303,7 @@ mod tests {
             // 嵌入式 / 文件引擎：没有系统视图可查
             "h2", "derby", "duckdb",
             // 系统表还没接入（不是漏配，是明确没做）
-            "oracle", "dm", "db2", "databend", "risingwave",
+            "oracle", "dm", "db2", "databend", "risingwave", "saphana",
         ];
         for kind in dbmind_core::ConnectionKind::ALL {
             // NoSQL 走各自的监控接口，不进这张表
