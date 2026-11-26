@@ -2052,11 +2052,9 @@ pub async fn task(
                 .await
                 .map_err(|err| err.message)?;
             let filename = export_name(&req);
-            task.set_message(format!(
-                "导出完成：{} 行（连接 {label}），已保存到 {}",
-                outcome.rows,
-                path.display()
-            ));
+            // 不再拼「已保存到 <临时中转路径>」：那是后端取回即删的中转文件，
+            // 用户导出时早已在另存为面板里选好了落盘位置（选完即落盘），显示这条只会误导。
+            task.set_message(format!("导出完成：{} 行（连接 {label}）", outcome.rows));
             for notice in &outcome.notices {
                 task.log(notice.clone());
             }
@@ -2106,11 +2104,11 @@ pub async fn dump_task(
                 req.format.media().to_string()
             };
             let filename = format!("dump_{}.{ext}", tasks::stamp());
+            // 同上：不显示后端中转路径（用户早已在另存为面板选好落盘位置）
             task.set_message(format!(
-                "整库转储完成：{} 张表 / {} 行（连接 {label}），已保存到 {}",
+                "整库转储完成：{} 张表 / {} 行（连接 {label}）",
                 outcome.total.max(0),
-                outcome.rows,
-                path.display()
+                outcome.rows
             ));
             for notice in &outcome.notices {
                 task.log(notice.clone());

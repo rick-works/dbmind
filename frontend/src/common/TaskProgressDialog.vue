@@ -28,10 +28,10 @@
       </div>
     </div>
 
-    <!-- 日志区默认不显示。
-         导出这类任务的日志就是「已导出 5000 行」「已导出 10000 行」的重复流水，
-         真正有用的是上面的进度 / 行速 / 剩余时间；留着只是噪声（用户明确要求去掉）。
-         危险操作那种「一条条已执行的语句」才有看的价值，由调用方显式开 show-logs。 -->
+    <!-- 详细日志默认展示。以前导出这类任务的日志被当成「重复流水」默认关掉，
+         结果前台执行时只有一根进度条、看不到任何细节，必须点「后台运行」再从任务中心
+         打开才有日志（用户实测反馈）。后端对所有任务都采集 logs，前台同样有数据，
+         所以这里默认开，调用方不必再逐个传 show-logs。 -->
     <div v-if="showLogs" class="tp-log-card">
       <div ref="logRef" class="tp-log-body">
         <div v-if="!logs.length" class="tp-log-empty">{{ emptyHint }}</div>
@@ -50,11 +50,6 @@
         <div class="tp-actions">
           <!-- cancellable=false 的场景：语句已经交给数据库执行，客户端**中断不了** ——
                与其放一个按不动的"取消"，不如不给（危险操作里的单个 DDL 就是这种）。 -->
-          <!-- 导出/转存这类有产物的任务：从任务中心「查看」打开时（原对话框早已关闭、
-               保存句柄也没了），产物只能在这里下载；产物只保留 30 分钟，按钮点了才知道有没有 -->
-          <el-button v-if="!isRunning && downloadable" size="small" :loading="downloading" @click="$emit('download')">
-            {{ $t('tpd.download') }}
-          </el-button>
           <el-button v-if="isRunning && cancellable" type="danger" size="small" :loading="canceling" @click="$emit('cancel')">
             {{ canceling ? $t('tpd.canceling') : $t('common.cancel') }}
           </el-button>
@@ -79,7 +74,7 @@
 // total <= 0 时进度条进入 indeterminate，避免未知总量时百分比乱跳。
 import { computed, watch, nextTick, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Loading, CircleCheckFilled, CircleCloseFilled, Document } from '@element-plus/icons-vue'
+import { Loading, CircleCheckFilled, CircleCloseFilled } from '@element-plus/icons-vue'
 
 import { t } from '../utils/i18n'
 
@@ -95,14 +90,11 @@ const props = defineProps({
   phase: { type: String, default: '' },
   message: { type: String, default: '' },
   logs: { type: Array, default: () => [] },
-  // 是否展示日志列表（默认关，见模板里的说明）。日志本身仍在传：将来想看随时打开。
-  showLogs: { type: Boolean, default: false },
+  /** 是否展示详细日志（默认开，见模板里的说明） */
+  showLogs: { type: Boolean, default: true },
   canceling: { type: Boolean, default: false },
   /** 该任务能否取消：false = 不给取消按钮（后端已经在执行、停不下来） */
   cancellable: { type: Boolean, default: true },
-  /** 结束后是否提供「下载文件」（导出 / SQL 转存；任务中心重新打开时用） */
-  downloadable: { type: Boolean, default: false },
-  downloading: { type: Boolean, default: false },
   /**
    * 运行中允许「转入后台」：点 ✕ 不再拦截，而是提示「已转入后台」并关窗 ——
    * 任务在后端继续跑，任务中心里能找回进度、能停止。
@@ -116,7 +108,7 @@ const props = defineProps({
   backgroundable: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['update:visible', 'cancel', 'close', 'download', 'background'])
+const emit = defineEmits(['update:visible', 'cancel', 'close', 'background'])
 
 const logRef = ref(null)
 

@@ -1280,13 +1280,9 @@
     :phase="bgDetailPhase"
     :message="bgDetailMessage"
     :logs="bgDetailLogs"
-    :show-logs="true"
     :canceling="bgDetailCanceling"
-    :downloadable="bgDetailStatus === 'success' && bgHasArtifact(bgDetailTask?.kind)"
-    :downloading="bgDetailDownloading"
     :backgroundable="true"
     @cancel="cancelBgDetail"
-    @download="downloadBgDetail"
     @close="closeBgDetail"
   />
 </template>
@@ -1294,7 +1290,7 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick, defineAsyncComponent, h } from 'vue'
 
-import { applyTaskSnapshot, finishExport } from '../../utils/useExportTask'
+import { applyTaskSnapshot, finishExport, pickExportTarget } from '../../utils/useExportTask'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, ElLoading } from 'element-plus'
 import { renderMarkdown } from '../../utils/markdown'
@@ -1401,9 +1397,9 @@ import { hasVisibleOverlay } from '../../utils/useShortcuts'
 import { openExternal } from '../../utils/externalLinks'
 import { bgTasks, addBgTask, removeBgTask, clearBgTasks, setBgTaskStatus, ensureBgTasksStore } from '../sync/backgroundTasks'
 // 后台任务的类型分派（状态 / 取消 / 文案 / 能否就地还原）：一处 switch，别再在界面里写第二份
-import { bgKindKey, bgKindClassOf, bgKindStopMsg, bgKindRunningKey, bgTaskStatus, bgTaskCancel, bgIsTerminal, bgInlineResumable, bgHasArtifact } from '../sync/bgTaskApi'
+import { bgKindKey, bgKindClassOf, bgKindStopMsg, bgKindRunningKey, bgTaskStatus, bgTaskCancel, bgIsTerminal, bgInlineResumable } from '../sync/bgTaskApi'
 import { Coin, Refresh, Setting, SetUp, Plus, Folder, FolderAdd, Grid, View, Mouse, Switch, Promotion, Search, Operation, BellFilled, Timer, DocumentRemove, Document, DocumentCopy, Download, Upload, ArrowRight, ArrowLeft, ArrowUp, Expand, Fold, Edit, Delete, Connection, FolderOpened, CopyDocument, EditPen, Cpu, CircleClose, Close, SwitchButton, Loading, User, UserFilled, CollectionTag, Collection, ArrowDown, DataAnalysis, Monitor, Stopwatch, VideoPlay } from '@element-plus/icons-vue'
-import { listConnections, listCatalogs, listDatabases, listSchemas, listTables, listColumns, listIndexes, getTableCounts, disconnectSessions, disconnectDatabase, noSqlDatabases, noSqlCollections, noSqlDeleteCollection, listProcedures, listTriggers, listEvents, listUsers, getUserInfo, userAction, getTableDdl, getObjectInfo, exportData, exportStart, exportTask, exportCancel, exportDownload, testConnectionById, deleteConnection, tableAction, getFeatures, alterTable, executeSql, copyConnection, saveConnection, aiNl2sql, aiExplain, aiInsight, aiDataDict, listHistory, clearHistory } from '../../api'
+import { listConnections, listCatalogs, listDatabases, listSchemas, listTables, listColumns, listIndexes, getTableCounts, disconnectSessions, disconnectDatabase, noSqlDatabases, noSqlCollections, noSqlDeleteCollection, listProcedures, listTriggers, listEvents, listUsers, getUserInfo, userAction, getTableDdl, getObjectInfo, exportData, exportStart, exportTask, exportCancel, testConnectionById, deleteConnection, tableAction, getFeatures, alterTable, executeSql, copyConnection, saveConnection, aiNl2sql, aiExplain, aiInsight, aiDataDict, listHistory, clearHistory } from '../../api'
 import TaskProgressDialog from '../../common/TaskProgressDialog.vue'
 // 任务状态查询/取消已全部按 kind 分派到 modules/sync/bgTaskApi.js，这里只留设置读取
 import { getSettings } from '../../api'
@@ -2579,7 +2575,6 @@ const bgDetailPhase = ref('')
 const bgDetailMessage = ref('')
 const bgDetailLogs = ref([])
 const bgDetailCanceling = ref(false)
-const bgDetailDownloading = ref(false)
 const bgDetailState = {
   status: bgDetailStatus, done: bgDetailDone, total: bgDetailTotal,
   phase: bgDetailPhase, message: bgDetailMessage, logs: bgDetailLogs,
@@ -2645,18 +2640,6 @@ const cancelBgDetail = async () => {
     ElMessage.error(e?.message || t('common.unknownError'))
   } finally {
     setTimeout(() => { bgDetailCanceling.value = false }, 2000)
-  }
-}
-const downloadBgDetail = async () => {
-  const task = bgDetailTask.value
-  if (!task) return
-  bgDetailDownloading.value = true
-  try {
-    // 复用导出的收尾（桌面壳弹系统另存为 / 浏览器走下载）——产物只保留 30 分钟，
-    // 过期或已在原对话框下过，这里会明确报错而不是静默
-    await finishExport(bgDetailState, task.connId, task.id, task.name || task.title, task.format || '')
-  } finally {
-    bgDetailDownloading.value = false
   }
 }
 /**
@@ -8776,6 +8759,13 @@ const ctxExport = async (format) => {
   const db = d.db || currentDb.value
   const name = d.table || d.label
   closeCtxMenu()
+  // **先选保存位置，再提交导出**（与数据预览那条链路一致）：
+  // 异步导出跑几十秒~几分钟，跑完时浏览器的"用户手势"早已过期，那时再弹另存为会被
+  // 安全策略拒绝（SecurityError），只能退回静默下载到默认目录 —— 用户看到的正是
+  // 「导出完才让我选文件夹」。这一步必须放在下面任何 await 之前，否则手势也丢了。
+  const target = await pickExportTarget(name, format)
+  if (target && target.canceled) return
+  if (target && target.failed) { ElMessage.error(t('mv.saveDialogFailed')); return }
   exportConnId.value = cid
   exportTargetName.value = name
   exportStatus.value = 'running'
@@ -8811,7 +8801,7 @@ const ctxExport = async (format) => {
       extra: { name, format }
     })
     exportProgressVisible.value = true
-    startExportPolling(name, format)
+    startExportPolling(name, format, target)
   } catch (e) {
     ElMessage.error(t('mv.exportFailed', { detail: errMsg(e) }))
   }
@@ -8824,7 +8814,7 @@ const exportState = {
   seenLogs: 0
 }
 
-const startExportPolling = (name, format) => {
+const startExportPolling = (name, format, target = null) => {
   if (exportPollTimer) clearInterval(exportPollTimer)
   const extMap = { csv: 'csv', excel: 'xlsx', json: 'json', 'sql-insert': 'sql', 'sql-update': 'sql', 'sql-delete': 'sql', ddl: 'sql' }
   exportPollTimer = setInterval(async () => {
@@ -8846,8 +8836,8 @@ const startExportPolling = (name, format) => {
           logs: exportLogs.value.map(l => l.text),
           elapsedMs: r.elapsedMs
         })
-        // 与 useExportTask 共用同一套收尾：下载 / 落盘提示 / 打开文件夹
-        await finishExport(exportState, cid, exportTaskId.value, name, format)
+        // 与 useExportTask 共用同一套收尾：按导出前选好的位置直接落盘（不再结束时才弹另存为）
+        await finishExport(exportState, cid, exportTaskId.value, name, format, target)
       }
     } catch (e) {
       console.error('导出进度轮询失败', e)
