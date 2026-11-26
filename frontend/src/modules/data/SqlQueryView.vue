@@ -816,6 +816,8 @@ const running = ref(false)
 const loading = ref(false)
 const resultVisible = ref(false)
 const editorRatio = ref(1)
+// 首次出结果时编辑器/结果区的默认分割：各占一半（可通过分隔条拖动或双击调整）
+const DEFAULT_EDITOR_RATIO = 0.5
 
 // 执行取消
 const execId = ref('')
@@ -5209,7 +5211,7 @@ const runSql = async (page = 1, size = pageSize.value, batchable = true, overrid
   queryTimer = setInterval(() => { elapsedTime.value = Date.now() - queryStart }, 100)
   // 首次出结果时把"只有编辑器"的布局切成上下分栏。
   // 现在比例 1 也可能是用户**亲手**拉到底（编辑器铺满）的结果，那种情况下别去动他。
-  if (editorRatio.value === 1 && !ratioTouched) { editorRatio.value = 0.6; ratioCycle = 0 }
+  if (editorRatio.value === 1 && !ratioTouched) { editorRatio.value = DEFAULT_EDITOR_RATIO; ratioCycle = 0 }
   try {
     const connId = selectedConnId.value || props.conn?.id
     if (isNoSql.value) {
@@ -5869,7 +5871,7 @@ const EDITOR_RATIO_MIN = 0
 const EDITOR_RATIO_MAX = 1
 // 双击循环的状态：0 = 不在循环内，1 = 已到最上，2 = 已到最下
 let ratioCycle = 0
-let ratioBeforeCycle = 0.6      // 进入循环前的比例，第三次双击还原到这里
+let ratioBeforeCycle = DEFAULT_EDITOR_RATIO  // 进入循环前的比例，第三次双击还原到这里
 let ratioTouched = false        // 用户是否亲手调过比例（决定 runSql 还要不要套用"首次出结果 0.6"）
 let dragState = null
 const onResizerStart = (e) => {
@@ -5908,7 +5910,7 @@ const onResizerMove = (e) => {
 const onResizerDblClick = () => {
   ratioTouched = true
   if (ratioCycle === 0) {
-    ratioBeforeCycle = editorRatio.value || 0.6
+    ratioBeforeCycle = editorRatio.value || DEFAULT_EDITOR_RATIO
     editorRatio.value = EDITOR_RATIO_MIN
     ratioCycle = 1
     return
@@ -6090,9 +6092,9 @@ onBeforeUnmount(() => {
      比设计值宽出两倍多（这就是截图里那条偏宽的缝）。缝宽只由中间那一行决定。 */
   gap: 0;
   grid-template-rows:
-    minmax(0, calc(var(--editor-ratio, 0.6) * (100% - 6px)))
+    minmax(0, calc(var(--editor-ratio, 0.5) * (100% - 6px)))
     6px
-    minmax(0, calc((1 - var(--editor-ratio, 0.6)) * (100% - 6px)));
+    minmax(0, calc((1 - var(--editor-ratio, 0.5)) * (100% - 6px)));
 }
 .editor-area { min-height: 0; display: flex; flex-direction: column; background: var(--dc-bg-card); border: 1px solid var(--dc-border); border-radius: var(--dc-radius); overflow: hidden; box-shadow: var(--dc-shadow-sm); }
 /* ===== 工具条单行压缩（JS 按级标 .icon-only，见 fitHeadActions）=====
