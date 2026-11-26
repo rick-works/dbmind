@@ -31,17 +31,20 @@ fn category_of(descriptor: &dbmind_core::TypeDescriptor) -> &'static str {
         | dbmind_core::RuntimeProtocol::Redis
         | dbmind_core::RuntimeProtocol::Elasticsearch => "NOSQL",
         _ if descriptor.local_file => "RELATIONAL_FILE",
-        // ClickHouse / Doris：也走 JDBC、也用 SQL，但它们是列存分析引擎 ——
+        // ClickHouse / Doris / SAP HANA：也走 JDBC、也用 SQL，但它们是列存分析引擎 ——
         // 没有事务、没有外键和二级索引，混在「关系型数据库」里会让人当成 MySQL 那样用。
-        _ if matches!(
-            descriptor.key,
-            "clickhouse" | "doris" | "starrocks" | "selectdb" | "databend" | "risingwave"
-        ) =>
-        {
-            "OLAP"
-        }
+        _ if is_olap_key(descriptor.key) => "OLAP",
         _ => "RELATIONAL",
     }
+}
+
+/// 列存分析引擎（含 SAP HANA）：也走 JDBC/SQL，但没有 MySQL 那类关系型库的事务/外键。
+/// 与前端 DataSourcePicker / ConnectionDialog 的 OLAP_CODES 三处同步。
+fn is_olap_key(key: &str) -> bool {
+    matches!(
+        key,
+        "clickhouse" | "doris" | "starrocks" | "selectdb" | "databend" | "risingwave" | "saphana"
+    )
 }
 
 /// 驱动类型清单（「新建数据源」弹窗与类型注册表都用它）。
@@ -415,6 +418,24 @@ pub async fn open_url(Json(body): Json<Value>) -> XResult<Json<Value>> {
             .map_err(|e| XError::internal(format!("打开链接失败：{e}")))?;
     }
     Ok(Json(json!({ "success": true, "url": url })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// OLAP 分组名单：SAP HANA 与既有列存引擎一起，别再漏回「关系型数据库」。
+    #[test]
+    fn 分析型数据库分组包含_saphana() {
+        for key in [
+            "clickhouse", "doris", "starrocks", "selectdb", "databend", "risingwave", "saphana",
+        ] {
+            assert!(is_olap_key(key), "{key} 应在 OLAP 分组");
+        }
+        for key in ["mysql", "postgresql", "oracle", "db2"] {
+            assert!(!is_olap_key(key), "{key} 不该在 OLAP 分组");
+        }
+    }
 }
 
 pub async fn mirror_get(State(state): State<AppState>) -> XResult<Json<Value>> {

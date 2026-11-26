@@ -127,10 +127,10 @@ const showLevel = (x) => ['browse', 'experimental'].includes(levelOf(x))
 const levelLabel = (x) => t(levelOf(x) === 'browse' ? 'dsp.lvlBrowse' : 'dsp.lvlExperimental')
 const levelTip = (x) => t(levelOf(x) === 'browse' ? 'dsp.lvlBrowseTip' : 'dsp.lvlExpTip')
 
-// OLAP（ClickHouse / Doris）单独成组：它们也走 JDBC、也用 SQL，但是列存分析引擎
+// OLAP（ClickHouse / Doris / SAP HANA）单独成组：它们也走 JDBC、也用 SQL，但是列存分析引擎
 // （无事务、无外键、无二级索引），跟 MySQL 那类关系型库不是一回事。
 // 旧内核不给 category='OLAP'，就按 code 兜底认出来。
-const OLAP_CODES = ['CLICKHOUSE', 'DORIS']
+const OLAP_CODES = ['CLICKHOUSE', 'DORIS', 'SAPHANA']
 const isOlap = (x) => x.category === 'OLAP' || OLAP_CODES.includes(String(x.code || '').toUpperCase())
 
 const groups = computed(() => [

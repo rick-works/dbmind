@@ -14,7 +14,7 @@ export default {
   // 上游兼容接口的模块路径段：与 plugins/connection-types/saphana.yaml 的 dialect 派生值一致
   module: 'saphana',
   label: 'SAP HANA',
-  category: 'RELATIONAL',
+  category: 'OLAP',
   noSql: false,
   schemaLevel: 'schema',
   defaultSchema: '',

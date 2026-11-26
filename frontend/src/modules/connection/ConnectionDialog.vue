@@ -506,8 +506,8 @@ const isWindowsClient = /windows/i.test(navigator.userAgent || '')
 const nativeWindowsAuth = computed(() => isWindowsAuth.value && isWindowsClient)
 const windowsAuthHint = computed(() => t('cd.windowsAuthHint'))
 
-/* OLAP（ClickHouse / Doris / StarRocks / SelectDB）在旧内核里仍报 category=RELATIONAL，按 code 兜底 */
-const OLAP_CODES = ['CLICKHOUSE', 'DORIS', 'STARROCKS', 'SELECTDB']
+/* OLAP（ClickHouse / Doris / StarRocks / SelectDB / SAP HANA）在旧内核里仍报 category=RELATIONAL，按 code 兜底 */
+const OLAP_CODES = ['CLICKHOUSE', 'DORIS', 'STARROCKS', 'SELECTDB', 'SAPHANA']
 const categoryLabel = computed(() => {
   const cur = currentType.value
   if (!cur) return ''
