@@ -9,8 +9,10 @@ import { persistUI } from './settings'
 import { t } from './i18n'
 
 // 「任务中心」用顶栏右侧同一枚任务图标（src/assets/nav/tasks.svg），
-// 免得同一功能在两处长得不一样；size 取 1em 跟随菜单项字号。
-const navIcon = (name) => () => h(NavIcon, { name, size: '1em' })
+// 免得同一功能在两处长得不一样。tasks 是实心图（墨迹几乎占满盒子），
+// 在「更多」下拉里跟旁边的 Element 线性图标放一起会显得大一号 —— 缩到 0.8em
+// 匹配旁边图标的视觉重量；同源不变，只是尺寸补偿。
+const navIcon = (name, size = '1em') => () => h(NavIcon, { name, size })
 
 export const TOP_MENU_ITEMS = [
   // 默认顺序（产品定版）：前 6 个直显在顶栏，其余进「更多」下拉（见 MainView TOP_MENU_MAX）。
@@ -24,7 +26,7 @@ export const TOP_MENU_ITEMS = [
   { id: 'compare', icon: Switch, label: () => t('nav.compare') },
   // 驱动管理：直达「设置 → 驱动管理」页（看每种数据源的驱动装没装 / 缺哪些 / 换镜像源 / 手动上传）
   { id: 'drivers', icon: Box, label: () => t('nav.drivers') },
-  { id: 'bgCenter', icon: navIcon('tasks'), label: () => t('sync.bgCenter') },
+  { id: 'bgCenter', icon: navIcon('tasks', '0.8em'), label: () => t('sync.bgCenter') },
   { id: 'monitor', icon: Monitor, label: () => t('nav.monitor') },
   { id: 'governance', icon: DataAnalysis, label: () => t('nav.governance') },
   // 插件中心：装 / 卸 / 启停 / 升级插件包。默认排在最后 → 落在「更多」下拉里

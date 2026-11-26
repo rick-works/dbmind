@@ -130,8 +130,11 @@ export async function saveToTarget(blob, filename, types, target, title = '') {
   const a = document.createElement('a')
   a.href = url
   a.download = filename
+  // Firefox 下未挂进 DOM 的 a.click() 常被忽略；revoke 太早（1s）大文件还没开始下载。
+  document.body.appendChild(a)
   a.click()
-  setTimeout(() => URL.revokeObjectURL(url), 1000)
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 30000)
   return { ok: true, name: filename, fallback: true }
 }
 
@@ -166,7 +169,11 @@ export async function saveGenerated({ filename, types, generate, title = '' }) {
   } catch (err) {
     return failSave(err)
   }
-  if (!blob) return { ok: false }
+  if (!blob) {
+    // 空内容不能静默：调用方按 ok===false 直接 return，用户点了导出却什么都没发生。
+    // failSave 自带明确提示（mv.saveFailed 带 {detail} 占位，不能直接 t）。
+    return failSave(new Error('generate returned empty content'))
+  }
   return saveToTarget(blob, filename, types, target, title)
 }
 
@@ -413,8 +420,11 @@ export function useExportTask() {
   }
 
   const close = () => {
+    // 关窗只隐藏 UI，**绝不能停轮询**：导出在后端继续跑，而「写进用户选的目录」
+    // 发生在轮询拿到终态后的 finishExport 里 —— 这里 clearInterval 会让选好的
+    // 文件永远不落盘（用户点过另存为却拿不到文件）。轮询、落盘、任务中心回写
+    // 都必须跑到终态，只是窗口不再显示。
     visible.value = false
-    if (timer) { clearInterval(timer); timer = null }
   }
 
   return reactive({

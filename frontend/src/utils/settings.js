@@ -217,9 +217,11 @@ const notePersistFailed = (key, err) => {
 export const persistUI = (lsKey, raw) => {
   let localOk = true
   try { localStorage.setItem(lsKey, raw) } catch { localOk = false }
-  // 本地写失败先说（放在 `if (!bk) return` 之前：没有后端键的 UI 缓存同样会丢）
-  if (!localOk) notePersistFailed(lsKey, new Error('localStorage write failed'))
   const bk = Object.keys(UI_BACKEND_KEYS).find((k) => UI_BACKEND_KEYS[k] === lsKey)
+  // 本地写失败先说（放在 `if (!bk) return` 之前：没有后端键的 UI 缓存同样会丢）。
+  // 用 bk 而不是 lsKey 记：成功回调按 bk 前缀清除，两边必须同一个前缀，
+  // 否则持久化成功后警告永不消失（曾出现 dbmind_editor: 与 ui.editor: 对不上）。
+  if (!localOk) notePersistFailed(bk || lsKey, new Error('localStorage write failed'))
   if (!bk) return
   clearTimeout(pushTimers[bk])
   pushTimers[bk] = setTimeout(() => {

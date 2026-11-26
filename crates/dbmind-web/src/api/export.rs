@@ -839,7 +839,10 @@ pub(crate) fn paging_sql(base: &str, offset: u64, size: u64, dialect: Dialect) -
     // 会整段落进注释里（表现为「点下一页数据不变」），包派生表那支还会把收尾括号吃掉。
     // 先剥掉顶层尾部注释，之后一律换行追加 —— 换行也是行注释的天然终点。
     let stripped = strip_trailing_comment(base);
-    let base = stripped.trim_end();
+    // 尾注释里若带分号（`select * from t; -- 说明`），剥完注释分号就露出来了 ——
+    // base_sql 的 trim_end_matches(';') 因结尾是注释而没剥掉它。这里再剥一次，
+    // 否则拼出 `select * from t;\nlimit …` 直接语法错（MySQL 1064 / Oracle ORA-00933）。
+    let base = strip_stmt_semicolon(&stripped).trim_end();
     // Oracle（含 11g）走 ROWNUM 包装：`offset … fetch …` 是 12c 语法，11g 报
     // ORA-00933（豫园 11.2.0.4 实测）。包装带来的辅助列 rn__ 由调用方剥掉。
     if let Some(wrapped) = dialect.wrap_paging(base, offset, size) {

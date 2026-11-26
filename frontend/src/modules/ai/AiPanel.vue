@@ -1242,7 +1242,7 @@ const srcPercent = (score) => Math.max(4, Math.min(100, Math.round(Number(score 
 /** 空态功能介绍：三句话说清它和「普通聊天」的区别 */
 const WELCOME_FEATURES = computed(() => [
   { name: t('ai.featLibrary'), desc: t('ai.featLibraryDesc'), icon: Coin },
-  { name: t('ai.featQuery'), desc: t('ai.featQueryDesc'), icon: Cpu },
+  { name: t('ai.featQuery'), desc: t('ai.featQueryDesc'), icon: AiMark },
   { name: t('ai.featDeliver'), desc: t('ai.featDeliverDesc'), icon: Download }
 ])
 /** 空态示例：点一下就直接提问（省掉「填入 → 再回车」两步） */
@@ -3574,7 +3574,15 @@ const exportDoc = async (markdown, format, nameHint) => {
     // 先选目录再让后端转换（PDF 等慢转换也不会让用户等完才发现没选位置）
     const saved = await saveGenerated({
       filename,
-      generate: () => aiExportDoc({ title, markdown, format, fileName: base })
+      generate: async () => {
+        try {
+          return await aiExportDoc({ title, markdown, format, fileName: base })
+        } catch (e) {
+          // 后端报错时 response.data 也是 Blob，saveGenerated 的通用 errMsg 读不出内容；
+          // 在这里先把后端 message 解出来再抛，用户才看得到真正的失败原因。
+          throw new Error(await blobErrMsg(e) || t('qa.exportFailed'))
+        }
+      }
     })
     // 取消 / 保存失败都不该说「已导出」；失败提示由 saveGenerated 统一给过。
     // 注意以前 return 写在 try 里而重置写在 try 外，取消一次按钮就一直转圈

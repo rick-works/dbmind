@@ -158,7 +158,9 @@
               <div class="ai-dd-head">{{ $t('nav.ai') }}</div>
               <el-dropdown-menu>
                 <el-dropdown-item command="explain">
-                  <AiMark class="skills-ic" />
+                  <!-- 与其它项同结构：图标装进 el-icon 的 20px 底框，AiMark 自带 vertical-align
+                       直接挂在 .skills-ic 上会和 flex 居中冲突，导致「解释 SQL」偏高 -->
+                  <el-icon class="skills-ic"><AiMark /></el-icon>
                   <span class="skills-name">{{ $t('sqlq.aiExplain') }}</span>
                 </el-dropdown-item>
                 <el-dropdown-item command="optimize">
@@ -176,7 +178,8 @@
               </el-dropdown-menu>
             </template>
           </el-dropdown>
-          <el-button size="small" class="act-secondary" data-g="1" type="success" :icon="Document" v-fast-tip="() => $t('common.save')" @click="onSaveClick"><span class="bt-tx">{{ $t('common.save') }}</span></el-button>
+          <!-- 保存按钮全项目统一用 Check（数据浏览 / 设置页都是它），Document 是「文档」不是「保存」 -->
+          <el-button size="small" class="act-secondary" data-g="1" type="success" :icon="Check" v-fast-tip="() => $t('common.save')" @click="onSaveClick"><span class="bt-tx">{{ $t('common.save') }}</span></el-button>
         </div>
       </div>
       <div class="editor-body" @contextmenu.prevent="onEditorContextMenu">
@@ -676,7 +679,7 @@ import {
   Close, CircleCloseFilled, CircleCheckFilled, Coin, Brush, Clock,
   Document, VideoPause, Connection, Folder, DataAnalysis, EditPen,
   Cpu, ArrowDown, Select, Histogram, Calendar, Switch as SwitchIcon, Tickets, Grid, Operation,
-  Collection, RefreshLeft, DArrowRight, Key
+  Collection, RefreshLeft, DArrowRight, Key, Check
 } from '@element-plus/icons-vue'
 import AiMark from '../../common/AiMark.vue'
 import TplVarDialog from './TplVarDialog.vue'

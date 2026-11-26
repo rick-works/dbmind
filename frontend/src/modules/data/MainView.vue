@@ -576,7 +576,13 @@
          类型/任务/状态/开始/结束/耗时/操作）；running = 正在执行（右侧时钟悬浮的轻列表）。
          状态在打开时实时刷新，终态写回记录（持久化），刷新页面后历史仍显示完成/失败。 -->
     <!-- 宽度跟着列走：类型列加宽后 1000px 装不下，最右边的「操作」列会被挤出可视区（要横向滚动） -->
-    <el-dialog v-model="bgCenterOpen" :title="bgCenterMode === 'running' ? $t('sync.bgRunningTitle') : $t('sync.bgCenter')" width="min(1180px, 96vw)" append-to-body class="bg-center-dialog">
+    <el-dialog v-model="bgCenterOpen" width="min(1180px, 96vw)" append-to-body class="bg-center-dialog">
+    <template #header>
+      <div class="dlg-title">
+        <span class="dlg-title-ic"><NavIcon name="tasks" size="16" /></span>
+        <span>{{ bgCenterMode === 'running' ? $t('sync.bgRunningTitle') : $t('sync.bgCenter') }}</span>
+      </div>
+    </template>
     <template v-if="bgCenterMode === 'history'">
     <div v-if="bgTasks.length" class="bg-toolbar">
       <el-button size="small" type="danger" plain :icon="ElDelete" @click="confirmClearBg">{{ $t('sync.bgClear') }}</el-button>
@@ -668,7 +674,7 @@
         <!-- 「发送到 AI」放**一级菜单**：放在 AI 助手子菜单里的话，右键后要悬停才展开，
              第一眼会以为"表上根本没有这个入口"（用户实测反馈）。子菜单里只留
              「数据洞察 / 把表结构存入知识库」这两个更重的动作。 -->
-        <li @click="sendNodeToAi(ctxMenu.data)"><el-icon><Cpu /></el-icon><span>{{ $t('menu.sendToAi') }}</span></li>
+        <li @click="sendNodeToAi(ctxMenu.data)"><AiMark /><span>{{ $t('menu.sendToAi') }}</span></li>
         <!-- AI 入口铺到工作流里：不用先打开 AI 面板再复述一遍表名 -->
         <li class="has-sub" @mouseenter="ctxSub('ai')" @mouseleave="ctxSub(null)">
           <AiMark class="ai-ic" /><span>{{ $t('menu.aiAssistant') }}</span><el-icon class="arrow"><ArrowRight /></el-icon>
@@ -914,7 +920,7 @@
         <!-- 发送到 AI：排在「备份 / 还原」之后、危险操作之前 ——
              它是"把这个对象交给 AI 分析"的入口，与上面那串工作流动作同类。 -->
         <li class="ctx-item" @click="sendNodeToAi(treeCtxMenu.data)">
-          <el-icon><Cpu /></el-icon>{{ $t('menu.sendToAi') }}
+          <AiMark />{{ $t('menu.sendToAi') }}
         </li>
         <li class="divider" />
         <li class="ctx-item danger" @click="treeCtxDeleteConn(treeCtxMenu.data.connId)">
@@ -987,7 +993,7 @@
           </li>
           <!-- 与「连接」菜单保持同一位置（备份 / 还原之后），两个菜单不打架 -->
           <li class="ctx-item" @click="sendNodeToAi(treeCtxMenu.data)">
-            <el-icon><Cpu /></el-icon>{{ $t('menu.sendToAi') }}
+            <AiMark />{{ $t('menu.sendToAi') }}
           </li>
           <li class="divider" />
           <li class="ctx-item" @click="dbCtxSearch()">
@@ -1087,8 +1093,14 @@
   <NewDbDialog v-model="newDbVisible" :conn-id="newDbCtx.connId" :conn-type="newDbCtx.connType" @created="onNewDbCreated" />
   <!-- 插件中心：装 / 卸 / 启停 / 升级声明式插件包。做成弹窗而不是页签 ——
        装完就关，不需要长期占着一块工作区；技能本身在 AI 对话里生效。 -->
-  <el-dialog v-model="pluginsOpen" :title="$t('plg.title')" width="min(1040px, 94vw)"
+  <el-dialog v-model="pluginsOpen" width="min(1040px, 94vw)"
              append-to-body class="plg-dialog">
+    <template #header>
+      <div class="dlg-title">
+        <span class="dlg-title-ic"><el-icon :size="16"><MagicStick /></el-icon></span>
+        <span>{{ $t('plg.title') }}</span>
+      </div>
+    </template>
     <PluginCenter />
   </el-dialog>
   <!-- 脚本管理：跨连接/跨库列表 + 搜索 + 增删改查（增/改回 SQL 编辑器） -->
@@ -1133,10 +1145,10 @@
   >
     <!-- 标题走 #header 槽位（与「数据传输 / 数据对比 / 数据库 DDL」等弹窗一致）：
          圆角渐变徽标 + 文字。用 title 属性只有一行光秃秃的文字，和别的弹窗放一起显得少一截（用户反馈）。
-         图标沿用顶栏「检查更新」那枚 Refresh —— 同一个动作，不用两个图标 -->
+         图标与顶栏「检查更新」按钮同源（NavIcon name=update）—— 同一动作必须同一枚图标 -->
     <template #header>
       <div class="dlg-title">
-        <span class="dlg-title-ic"><el-icon :size="16"><Refresh /></el-icon></span>
+        <span class="dlg-title-ic"><NavIcon name="update" size="16" /></span>
         <span>{{ $t('update.title') }} · v{{ updateInfo && updateInfo.latest }}</span>
       </div>
     </template>
@@ -1166,10 +1178,10 @@
     :show-close="dlStatus === 'running'"
     :close-on-click-modal="false"
   >
-    <!-- 与上面那个弹窗同款标题（同一条流程里的两屏，样式不该两样） -->
+    <!-- 与上面「检查更新」弹窗同款标题（同一条流程里的两屏，图标必须同一枚） -->
     <template #header>
       <div class="dlg-title">
-        <span class="dlg-title-ic"><el-icon :size="16"><Download /></el-icon></span>
+        <span class="dlg-title-ic"><NavIcon name="update" size="16" /></span>
         <span>{{ $t('update.dlTitle') }}</span>
       </div>
     </template>
@@ -1398,7 +1410,7 @@ import { openExternal } from '../../utils/externalLinks'
 import { bgTasks, addBgTask, removeBgTask, clearBgTasks, setBgTaskStatus, ensureBgTasksStore } from '../sync/backgroundTasks'
 // 后台任务的类型分派（状态 / 取消 / 文案 / 能否就地还原）：一处 switch，别再在界面里写第二份
 import { bgKindKey, bgKindClassOf, bgKindStopMsg, bgKindRunningKey, bgTaskStatus, bgTaskCancel, bgIsTerminal, bgInlineResumable } from '../sync/bgTaskApi'
-import { Coin, Refresh, Setting, SetUp, Plus, Folder, FolderAdd, Grid, View, Mouse, Switch, Promotion, Search, Operation, BellFilled, Timer, DocumentRemove, Document, DocumentCopy, Download, Upload, ArrowRight, ArrowLeft, ArrowUp, Expand, Fold, Edit, Delete, Connection, FolderOpened, CopyDocument, EditPen, Cpu, CircleClose, Close, SwitchButton, Loading, User, UserFilled, CollectionTag, Collection, ArrowDown, DataAnalysis, Monitor, Stopwatch, VideoPlay } from '@element-plus/icons-vue'
+import { Coin, Setting, SetUp, Plus, Folder, FolderAdd, Grid, View, Mouse, Switch, Promotion, Search, Operation, BellFilled, Timer, DocumentRemove, Document, DocumentCopy, Download, Upload, ArrowRight, ArrowLeft, ArrowUp, Expand, Fold, Edit, Delete, Connection, FolderOpened, CopyDocument, EditPen, Cpu, CircleClose, Close, SwitchButton, Loading, User, UserFilled, CollectionTag, Collection, ArrowDown, DataAnalysis, Monitor, Stopwatch, VideoPlay, MagicStick } from '@element-plus/icons-vue'
 import { listConnections, listCatalogs, listDatabases, listSchemas, listTables, listColumns, listIndexes, getTableCounts, disconnectSessions, disconnectDatabase, noSqlDatabases, noSqlCollections, noSqlDeleteCollection, listProcedures, listTriggers, listEvents, listUsers, getUserInfo, userAction, getTableDdl, getObjectInfo, exportData, exportStart, exportTask, exportCancel, testConnectionById, deleteConnection, tableAction, getFeatures, alterTable, executeSql, copyConnection, saveConnection, aiNl2sql, aiExplain, aiInsight, aiDataDict, listHistory, clearHistory } from '../../api'
 import TaskProgressDialog from '../../common/TaskProgressDialog.vue'
 // 任务状态查询/取消已全部按 kind 分派到 modules/sync/bgTaskApi.js，这里只留设置读取

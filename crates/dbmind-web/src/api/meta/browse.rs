@@ -1242,7 +1242,9 @@ pub async fn search_objects(
 /// **不转义单引号** —— 产出必然再过一遍 `dialect.literal`，那里会转；在这里先转
 /// 会被二次翻倍（`O'Brien` → `O''''Brien`），含引号的搜索永远匹配不到。
 pub(crate) fn escape_like(value: &str) -> String {
-    value.replace('%', "\\%").replace('_', "\\_")
+    // 必须先转义反斜杠本身：否则用户文本 `a\%` 会产出 `a\\%`，LIKE 里 `\\` 是字面
+    // 反斜杠、`%` 仍是通配符，搜出一堆并不含该关键字的行（显式 ESCAPE '\' 同理）。
+    value.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
 }
 
 /// `escape_like()` 产出的是 `\%` / `\_`，但**只有 MySQL/PG 族默认把 `\` 当 LIKE 转义符**；

@@ -51,7 +51,8 @@
     <template #footer>
       <el-button :icon="Plus" @click="addRow">{{ $t('sqlq.tplVarAdd') }}</el-button>
       <el-button @click="visible = false">{{ $t('common.cancel') }}</el-button>
-      <el-button type="primary" :disabled="!rows.length" :loading="saving" @click="save">{{ $t('common.save') }}</el-button>
+      <!-- 删光变量后必须还能保存：空列表要能写回后端，否则下次打开旧变量又回来了 -->
+      <el-button type="primary" :disabled="saving" :loading="saving" @click="save">{{ $t('common.save') }}</el-button>
     </template>
   </el-dialog>
 </template>
@@ -72,11 +73,15 @@ const visible = computed({
 
 const rows = ref([])
 const saving = ref(false)
+let loadToken = 0
 watch(visible, async (v) => {
   if (!v) return
   // 变量库在 dbmind.db 里（不是 localStorage）：打开时先确保拉过一次，再拷一份现库，
-  // 编辑期间不动真身（取消不产生副作用）
+  // 编辑期间不动真身（取消不产生副作用）。ensureSqlVarStore 是异步的，期间用户可能
+  // 已经点「添加变量」并输入了 —— 用 token 校验打开代次，避免回填把编辑覆盖掉。
+  const token = ++loadToken
   await ensureSqlVarStore()
+  if (token !== loadToken || !visible.value) return
   rows.value = readTplVars().map((r) => ({ name: r.name || '', value: r.value || '', note: r.note || '', type: r.type || 'auto' }))
 })
 

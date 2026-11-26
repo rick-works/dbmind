@@ -1,7 +1,6 @@
 <template>
   <el-dialog
     v-model="visible"
-    :title="title"
     width="640px"
     class="bkp-dialog"
     :close-on-click-modal="false"
@@ -11,6 +10,12 @@
     @opened="onOpen"
     @closed="onClose"
   >
+    <template #header>
+      <div class="dlg-title">
+        <span class="dlg-title-ic"><el-icon :size="16"><component :is="mode === 'backup' ? Download : Upload" /></el-icon></span>
+        <span>{{ title }}</span>
+      </div>
+    </template>
     <!-- 向导步骤区 -->
     <template v-if="!running && !finished">
       <el-steps :active="activeIndex" align-center finish-status="success" class="wizard-steps">
@@ -335,7 +340,7 @@ import { ElMessage } from 'element-plus'
 import { t, locale as uiLocale } from '../../utils/i18n'
 // 「库」这一层要不要画 / 显示什么（Oracle、DM 没有库层：它就是连接里填的服务名）
 import { hideDbLevelOf, dbDisplayOf } from '../../types'
-import { Download, FolderOpened, Folder, ArrowUp, Document, CircleClose, CircleCheck, Clock, Loading } from '@element-plus/icons-vue'
+import { Download, Upload, FolderOpened, Folder, ArrowUp, Document, CircleClose, CircleCheck, Clock, Loading } from '@element-plus/icons-vue'
 import ScopeIcon from '../../common/ScopeIcon.vue'
 import {
   listDatabases,

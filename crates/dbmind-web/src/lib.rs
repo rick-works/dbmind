@@ -555,6 +555,23 @@ async fn put_setting(
 ) -> ApiResult {
     let engine = state.engine();
     let value = body.value;
+    // 口令 AES 密钥是本机私有的：一旦被外部改写，历史连接口令就再也解不开
+    // （Store.secret 是 OnceLock，本进程仍用旧密钥；重启后换新的 → 密文全废）。
+    // 配置导入已过滤它，这里再堵住直接 PUT 的口子。
+    if key == dbmind_core::secret::KEY_SETTING || key == dbmind_core::mask::KEY_AES {
+        return Err(ApiError(DbMindError::new(
+            ErrorCode::QueryInvalid,
+            "该设置项是本机私有密钥，不允许修改",
+        )));
+    }
+    // 数值型安全设置同样先校验：safety.maxWriteRows 解析失败会在读取时回退 0
+    //（0 = 不限制），一个拼错的值（"1,000" / "1000 "）会静默关掉写操作行数上限。
+    if key == dbmind_core::Store::KEY_MAX_WRITE_ROWS && value.trim().parse::<u64>().is_err() {
+        return Err(ApiError(DbMindError::new(
+            ErrorCode::QueryInvalid,
+            "写操作行数上限必须是非负整数",
+        )));
+    }
     // 日志级别**先校验再落库**：值不合法当场拒绝，不让一个拼错的级别进了库
     // 之后每次启动都被静默忽略（用户还以为生效了）
     if key == dbmind_core::Store::KEY_LOG_LEVEL && !is_valid_log_level(&value) {
@@ -593,8 +610,10 @@ async fn export_config(State(state): State<AppState>) -> ApiResult {
         version: 1,
         exported_at: chrono::Local::now().to_rfc3339(),
         settings: settings.into_iter().filter(|(k, _)| {
-            // AES 密钥是本机私有的：导出去等于把「可解回明文」的钥匙一起送人
-            k != "ai.maskKey"
+            // 本机私有密钥绝不导出：app.secretKey 是连接口令的 AES 密钥，
+            // ai.maskKey 是脱敏密钥 —— 导出去等于把「解回明文」的钥匙一起送人；
+            // 导入到另一台机器后旧密文全部解不开（重启才生效，更难排查）。
+            k != dbmind_core::secret::KEY_SETTING && k != dbmind_core::mask::KEY_AES
         }).collect(),
     };
     Ok(Json(serde_json::to_value(bundle).unwrap_or_default()))
@@ -611,7 +630,8 @@ async fn import_config(
 ) -> ApiResult {
     let mut imported = 0usize;
     for (key, value) in body.settings {
-        if key == "ai.maskKey" { continue }
+        // 与导出侧同样过滤：配置包里若被塞进本机私有密钥，绝不能写进库
+        if key == dbmind_core::secret::KEY_SETTING || key == dbmind_core::mask::KEY_AES { continue }
         let engine = state.engine();
         blocking(move || engine.set_setting(&key, &value)).await?;
         imported += 1;
@@ -693,7 +713,7 @@ async fn cache_list(State(state): State<AppState>) -> ApiResult {
         .collect();
     for (key, dir) in [
         ("backups", home.join("backups")),
-        ("work", dbmind_core::paths::work_dir()),
+        ("exports", dbmind_core::paths::work_dir()),
         ("logs", home.join("logs")),
     ] {
         let (files, bytes) = dir_stats(&dir);
@@ -709,7 +729,7 @@ struct CacheClearBody {
 
 /// 清理勾选的缓存项。表类删行数，文件类删文件（被占用的跳过并如实回报）。
 async fn cache_clear(State(state): State<AppState>, Json(body): Json<CacheClearBody>) -> ApiResult {
-    const FILE_KEYS: &[&str] = &["backups", "work", "logs"];
+    const FILE_KEYS: &[&str] = &["backups", "exports", "logs"];
     let file_keys: Vec<String> = body
         .keys
         .iter()
@@ -731,7 +751,7 @@ async fn cache_clear(State(state): State<AppState>, Json(body): Json<CacheClearB
     for key in file_keys {
         let dir = match key.as_str() {
             "backups" => dbmind_core::paths::home_dir().join("backups"),
-            "work" => dbmind_core::paths::work_dir(),
+            "exports" => dbmind_core::paths::work_dir(),
             _ => dbmind_core::paths::home_dir().join("logs"),
         };
         results.push(json!({ "key": key, "files": clear_dir_files(&dir) }));

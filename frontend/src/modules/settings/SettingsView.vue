@@ -9,7 +9,7 @@
   >
     <template #header>
       <div class="dlg-title">
-        <span class="dlg-title-ic"><el-icon :size="16"><Operation /></el-icon></span>
+        <span class="dlg-title-ic"><NavIcon name="settings" size="16" /></span>
         <span>{{ $t('settings.title') }}</span>
       </div>
     </template>
@@ -1318,8 +1318,9 @@
           <div class="panel-title">{{ $t('settings.config.title') }}</div>
           <div class="panel-desc">{{ $t('settings.config.desc') }}</div>
           <div class="config-actions">
-            <el-button :icon="Document" @click="doExportConfig">{{ $t('settings.config.export') }}</el-button>
-            <el-button :icon="FolderOpened" @click="triggerImportConfig">{{ $t('settings.config.import') }}</el-button>
+            <!-- 与树菜单/其它导出导入统一：导出 Download、导入 Upload -->
+            <el-button :icon="Download" @click="doExportConfig">{{ $t('settings.config.export') }}</el-button>
+            <el-button :icon="Upload" @click="triggerImportConfig">{{ $t('settings.config.import') }}</el-button>
             <input ref="configFileRef" type="file" accept="application/json,.json" class="config-file" @change="onConfigFile" />
           </div>
           <div class="config-note">{{ $t('settings.config.note') }}</div>
@@ -1442,11 +1443,12 @@ import { ref, computed, watch, reactive, onMounted, onBeforeUnmount, nextTick, h
 import { ElMessage, ElMessageBox, ElTooltip, ElIcon } from 'element-plus'
 import {
   Connection, Brush, Box,
-  FolderOpened, EditPen, DataLine, Download, Operation, Monitor, Plus, Delete,
+  FolderOpened, EditPen, DataLine, Download, Monitor, Plus, Delete,
   CircleCheck, Timer, Pointer, Refresh, Search, Upload, Flag, InfoFilled, Lock, Check, Key,
   ArrowUp, ArrowDown, Document, DocumentCopy, Coin, Folder, QuestionFilled, WarningFilled
 } from '@element-plus/icons-vue'
 import AiMark from '../../common/AiMark.vue'
+import NavIcon from '../../common/NavIcon.vue'
 
 // 关于页的链接：许可全文与第三方声明都在主仓库里（与安装目录随包的 LICENSE /
 // THIRD-PARTY-NOTICES.md 是同一份内容）；离线时点开会失败，属预期行为。
