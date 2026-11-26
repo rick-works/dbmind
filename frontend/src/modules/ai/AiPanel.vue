@@ -431,20 +431,20 @@
                   <div class="ai-dd-head">{{ $t('ai.pickSkill') }}</div>
                   <el-dropdown-menu class="ai-model-menu skill-menu">
                     <el-dropdown-item disabled class="ai-dd-group">{{ $t('ai.builtinSkills') }}</el-dropdown-item>
-                    <el-dropdown-item v-for="s in tabs" :key="s.key" :command="s.key"
+                    <el-dropdown-item v-for="s in builtinSkills" :key="s.key" :command="s.key"
                                       :class="{ active: tab === s.key }" :title="s.desc">
                       <el-icon class="skills-ic"><component :is="s.icon" /></el-icon>
                       <span class="skills-name">{{ s.label }}</span>
                       <el-icon v-if="tab === s.key" class="skills-check"><Select /></el-icon>
                     </el-dropdown-item>
-                    <template v-if="pluginSkills.length">
+                    <template v-if="pluginItems.length">
                       <el-dropdown-item disabled class="ai-dd-group">{{ $t('ai.pluginSkills') }}</el-dropdown-item>
-                      <el-dropdown-item v-for="p in pluginSkills" :key="'plugin:' + p.id" :command="'plugin:' + p.id"
-                                        :class="{ active: isPicked(p.id) }" :title="p.description">
+                      <el-dropdown-item v-for="p in pluginItems" :key="p.command" :command="p.command"
+                                        :class="{ active: p.active }" :title="p.desc">
                         <span v-if="p.icon" class="skills-ic skill-emoji">{{ p.icon }}</span>
                         <el-icon v-else class="skills-ic"><MagicStick /></el-icon>
                         <span class="skills-name">{{ p.name }}</span>
-                        <el-icon v-if="isPicked(p.id)" class="skills-check"><Select /></el-icon>
+                        <el-icon v-if="p.active" class="skills-check"><Select /></el-icon>
                       </el-dropdown-item>
                     </template>
                     <el-dropdown-item v-else disabled class="ai-dd-group">{{ $t('ai.pluginSkillsEmpty') }}</el-dropdown-item>
@@ -906,6 +906,10 @@ const tabs = computed(() => [
 ])
 
 /** 当前选中的 Skill；`chat` 是默认态（不在 tabs 里），单独兜一个虚拟项 */
+/** Skills 下拉的「内置能力」分组：智能问数不再内置，入口只由已安装的问数插件提供。
+ *  tabs 本身仍保留 ask（问数页渲染 / openAskHistory / 斜杠命令都靠它），只是不在此分组露出。 */
+const builtinSkills = computed(() => tabs.value.filter(t => t.key !== 'ask'))
+
 const currentSkill = computed(() => tabs.value.find(t => t.key === tab.value)
   || { key: 'chat', label: t('ai.tabChat'), icon: ChatDotRound, desc: t('ai.tabChatDesc') })
 
@@ -914,6 +918,9 @@ const currentSkill = computed(() => tabs.value.find(t => t.key === tab.value)
 // 提示词由后端拼进 system（plugins::augment_system），之后每一轮对话都按它的要求作答。
 // 这样「所有技能都用对话完成」，用户不用学第二套表单。
 const pluginSkills = ref([])
+/** 已启用的「智能问数」插件（type=ask）：装了就在问数里自动生效，不需要选技能。
+ *  单列出来只是为了让用户看得见"装了什么"，不参与勾选（否则 prompt 会重复注入）。 */
+const askPlugins = ref([])
 /** 已选技能（跨卸载保留）：`[{ id, name, description }]` */
 const pickedSkills = toRef(_ps, 'pickedSkills')
 /** 上次拉清单的时刻：打开下拉会顺带刷新（刚装的插件要能马上看到），5 秒内不重复请求 */
@@ -923,12 +930,27 @@ const loadPluginSkills = async (force = false) => {
   pluginLoadedAt = Date.now()
   try {
     const data = await listPlugins()
-    pluginSkills.value = (data?.items || []).filter((p) => p.type === 'skill' && p.state === 'enabled')
+    const enabled = (data?.items || []).filter((p) => p.state === 'enabled')
+    pluginSkills.value = enabled.filter((p) => p.type === 'skill')
+    askPlugins.value = enabled.filter((p) => p.type === 'ask')
     // 插件被卸载/停用后，把已选里的死项摘掉（否则会一直占着 chip、还继续拼 system）
     const alive = new Set(pluginSkills.value.map((p) => p.id))
     pickedSkills.value = pickedSkills.value.filter((s) => alive.has(s.id))
   } catch { /* 插件清单拉不到不影响内置技能 */ }
 }
+/** 插件技能统一清单：问数插件（点它切到问数页）排前，普通技能（点它叠加生效）排后，
+ *  同属「插件技能」一个分组 —— 不再为问数插件单开分组。 */
+const pluginItems = computed(() => [
+  ...askPlugins.value.map(p => ({
+    command: 'ask:' + p.id, id: p.id, name: p.name, icon: p.icon,
+    desc: t('ai.pluginAskAutoTip'), active: tab.value === 'ask'
+  })),
+  ...pluginSkills.value.map(p => ({
+    command: 'plugin:' + p.id, id: p.id, name: p.name, icon: p.icon,
+    desc: p.description, active: isPicked(p.id)
+  }))
+])
+
 const pickedIds = computed(() => new Set(pickedSkills.value.map((s) => s.id)))
 const isPicked = (id) => pickedIds.value.has(id)
 /** 选中 / 取消一个插件技能（可多选，点一下切换） */
@@ -1048,6 +1070,12 @@ const pickSkill = (key) => {
   // 插件技能：选中/取消（可多选），不切页 —— 它在对话里叠加生效
   if (typeof key === 'string' && key.startsWith('plugin:')) {
     return togglePickedSkill(key.slice('plugin:'.length))
+  }
+  // 问数插件：智能问数已不做内置入口，点插件项就是切到问数页
+  //（tabs 里仍留 ask 供问数页渲染 / openAskHistory / 斜杠命令使用）
+  if (typeof key === 'string' && key.startsWith('ask:')) {
+    tab.value = tab.value === 'ask' ? 'chat' : 'ask'
+    return true
   }
   if (!tabs.value.some((x) => x.key === key)) return false
   // 再点一次已选中的那个 = 取消，回到自由对话（输入框里那个 chip 也会消失）
@@ -1453,9 +1481,13 @@ const TAB_DESC = computed(() => ({
  */
 const slashCommands = computed(() => [
   // 顺序与下拉一致：先内置能力，再插件技能
-  ...tabs.value.map(sk => ({
+  ...builtinSkills.value.map(sk => ({
     key: 'tab:' + sk.key, label: sk.label, desc: TAB_DESC.value[sk.key] || '', icon: sk.icon,
     group: t('ai.builtinSkills'), action: 'tab', target: sk.key
+  })),
+  ...askPlugins.value.map(p => ({
+    key: 'ask:' + p.id, label: p.name, desc: t('ai.pluginAskAutoTip'), icon: MagicStick,
+    group: t('ai.pluginSkills'), action: 'ask', target: p.id
   })),
   ...pluginSkills.value.map(p => ({
     key: 'plugin:' + p.id, label: p.name, desc: p.description || '', icon: MagicStick,
@@ -1553,8 +1585,12 @@ const pickSlash = (cmd) => {
   }
   slashOpen.value = false
   aiInput.value = ''
+  if (cmd.action === 'ask') {
+    if (pickSkill('ask:' + cmd.target)) ElMessage.success(t('ai.switchedTo', { name: cmd.label }))
+    return
+  }
   if (cmd.action === 'tab') {
-    // 统一走 pickSkill：技能斜杠命令是自动从 tabs 派生的，「智能问数」也在里面 ——
+    // 统一走 pickSkill：技能斜杠命令是自动从内置能力派生的 ——
     // 这里直接赋 tab 会切到没有渲染分支的 key（空白页），必须由 pickSkill 拦下来开页签。
     // 再选一次同一个 = 取消（与下拉的行为一致）
     if (pickSkill(cmd.target)) ElMessage.success(t('ai.switchedTo', { name: cmd.label }))
@@ -3278,11 +3314,17 @@ const applyThread = async (id) => {
  */
 const restoreSession = async () => {
   await ensureAiPanelPrefs()
-  // 页签切走再切回：panelState 里对话还留着，别覆盖（这是跨卸载，不是刷新）
-  if (messages.value.length) return
-  const s = readAiSession(_mode)
-  // 左栏「记录」清单：studio 才渲染，但要先拉——兜底恢复要靠它拿「最近一条」
+  // 左栏「记录」清单必须先拉，且**不能被下面的对话守卫挡住**：
+  // threads 是组件局部 ref，切走页签卸载再挂载时归零；而 messages 在 panelState 里
+  // 跨卸载保留，守卫会命中直接 return —— 结果对话还在、左侧记录却空了，
+  // 只有整页刷新（清空 panelState）才加载。列表加载与"是否恢复对话"是两件事。
   const listLoad = isStudio.value ? loadThreads() : null
+  // 页签切走再切回：panelState 里对话还留着，别覆盖（这是跨卸载，不是刷新）
+  if (messages.value.length) {
+    if (listLoad) await listLoad
+    return
+  }
+  const s = readAiSession(_mode)
   if (s.askThreadId) {
     const h = (askHist.value || []).find((x) => x.id === s.askThreadId)
     if (h) {

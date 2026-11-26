@@ -806,5 +806,12 @@
   ],
   "v2.2.6": [
     "On Windows Server 2012 R2, the bright blue system border around the window is gone - replaced with the same thin dark line as Windows 11; edge dragging to resize still works."
+  ],
+  "v2.2.7": [
+    "Calibrated the capability matrix across every data source: capabilities that are actually implemented are now shown as available, and ones that only looked available are corrected.",
+    "ClickHouse row editing now works: inserts, updates and deletes use native ALTER TABLE UPDATE / DELETE syntax, with clear notice about asynchronous mutations.",
+    "Enabled H2 user administration and DuckDB row editing; MongoDB and Redis read-only views are no longer shown as editable.",
+    "The AI assistant session history now reloads automatically when you switch back to its tab; no manual refresh needed.",
+    "Smart Ask is no longer duplicated as a built-in skill; it is provided solely by the installed ask plugin (Skills menu > Plugin skills) - click it to open Smart Ask."
   ]
 }
