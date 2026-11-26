@@ -117,9 +117,21 @@ pub trait DialectOps: Sync + Send {
         format!("truncate table {table}")
     }
 
-    /// 更新一行的语句（upsert 的更新分支）。
+    /// 更新一行的语句（upsert 的更新分支，以及表数据就地编辑）。
     fn update_sql(&self, table: &str, assignments: &str, condition: &str) -> String {
         format!("update {table} set {assignments} where {condition}")
+    }
+
+    /// 删除一行的语句（表数据就地编辑）。绝大多数方言是标准 DELETE；
+    /// ClickHouse 覆盖为 `alter table ... delete where`（裸 DELETE 它不认）。
+    fn delete_sql(&self, table: &str, condition: &str) -> String {
+        format!("delete from {table} where {condition}")
+    }
+
+    /// 更新/删除是异步 mutation（ClickHouse）：提交成功不代表已生效，
+    /// 且驱动不返回可靠的影响行数 —— 就地编辑的提示口径要据此调整。
+    fn row_ops_are_async_mutations(&self) -> bool {
+        false
     }
 
     // ---- 标识符与层级 ----

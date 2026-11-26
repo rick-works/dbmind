@@ -538,10 +538,10 @@ pub async fn data_save(
             .iter()
             .map(|c| match_condition(c, original.get(c), &dialect, &type_of(c)))
             .collect();
-        statements.push(format!(
-            "update {quoted} set {} where {}",
-            assignments.join(", "),
-            conditions.join(" and ")
+        statements.push(dialect.update_sql(
+            &quoted,
+            &assignments.join(", "),
+            &conditions.join(" and "),
         ));
     }
 
@@ -556,11 +556,14 @@ pub async fn data_save(
             .iter()
             .map(|c| match_condition(c, obj.get(c), &dialect, &type_of(c)))
             .collect();
-        statements.push(format!("delete from {quoted} where {}", conditions.join(" and ")));
+        statements.push(dialect.delete_sql(&quoted, &conditions.join(" and ")));
     }
 
     // 有 update/delete 才有可能「语句执行成功但一行都没匹配上」
     let has_row_ops = !updates.is_empty() || !deletes.is_empty();
+    // ClickHouse 的 update/delete 是异步 mutation：提交成功不代表已生效，驱动也不返回
+    // 可靠的影响行数（通常是 0）。不能照搬「affected=0 ⇒ 没匹配到行」的提示误导用户。
+    let async_mutations = has_row_ops && dialect.row_ops_are_async_mutations();
 
     if statements.is_empty() {
         return Ok(Json(json!({
@@ -608,7 +611,9 @@ pub async fn data_save(
             true,
             // 影响 0 行不能只说「已提交」：无主键表/行被他人改过时，定位条件一条也没命中，
             // 网格里那行却已经本地改掉了 —— 用户以为存上了，刷新就回滚。
-            if has_row_ops && affected == 0 {
+            if async_mutations {
+                format!("已提交 {executed} 条 mutation，正在异步执行，请稍后刷新查看结果")
+            } else if has_row_ops && affected == 0 {
                 format!("已提交 {executed} 条语句，但未匹配到任何行（数据可能已被修改或删除，请刷新后重试）")
             } else {
                 format!("已提交 {executed} 条语句，影响 {affected} 行")

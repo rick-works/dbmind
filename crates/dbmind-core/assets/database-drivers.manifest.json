@@ -647,7 +647,7 @@
         "schemaSearch": true,
         "sqlExplain": true,
         "sqlFileExecution": true,
-        "tableDataEdit": false,
+        "tableDataEdit": true,
         "tableImport": false,
         "tableStructureEdit": true,
         "userAdmin": true

@@ -900,6 +900,12 @@ impl DialectOps for ClickHouseOps {
     fn update_sql(&self, table: &str, assignments: &str, condition: &str) -> String {
         format!("alter table {table} update {assignments} where {condition}")
     }
+    fn delete_sql(&self, table: &str, condition: &str) -> String {
+        format!("alter table {table} delete where {condition}")
+    }
+    fn row_ops_are_async_mutations(&self) -> bool {
+        true
+    }
 }
 
 /// MySQL 协议族的列注释查询（MySqlOps 与 DorisOps 共用同一份写法）。

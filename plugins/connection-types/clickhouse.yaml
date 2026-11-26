@@ -58,7 +58,9 @@ capabilities:
   objectSource: true
   schemaSearch: true
   diagram: true
-  tableDataEdit: false
+  # 行编辑：后端 data_save 已按方言生成 UPDATE/DELETE（ClickHouse 走 ALTER TABLE ...
+  # UPDATE/DELETE ... WHERE 的异步 mutation）；CH 不能改排序键/主键列，前端已拦截。
+  tableDataEdit: true
   tableStructureEdit: true
   tableImport: false
   dataTransfer: true

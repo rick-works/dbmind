@@ -1420,6 +1420,20 @@ impl Dialect {
         self.ops().update_sql(table, assignments, condition)
     }
 
+    /// 删除一行的语句（表数据就地编辑用）。
+    ///
+    /// **ClickHouse 不吃裸 `DELETE FROM ... WHERE`**（实测 Code 62 语法错），
+    /// 只接受 `ALTER TABLE ... DELETE WHERE`（同样是异步 mutation）。
+    pub fn delete_sql(&self, table: &str, condition: &str) -> String {
+        self.ops().delete_sql(table, condition)
+    }
+
+    /// 更新/删除是否为异步 mutation（ClickHouse）：提交成功不代表已生效，
+    /// 驱动也不返回可靠影响行数，就地编辑的提示口径要据此调整。
+    pub fn row_ops_are_async_mutations(&self) -> bool {
+        self.ops().row_ops_are_async_mutations()
+    }
+
     /// 统计行数。表引用走 [`Self::quote_exact`] —— 调用方传的都来自目录元数据
     /// （树里的表名），用 `quote()` 会把 Oracle 上带引号建的小写表折成大写、报 ORA-00942。
     pub fn count_sql(&self, table: &str) -> String {
@@ -3578,6 +3592,16 @@ mod tests {
                 );
             } else {
                 assert!(update.starts_with("update "), "{key}: 标准 UPDATE：{update}");
+            }
+            // ⑤ 删除语句：ClickHouse 不吃裸 DELETE，必须 ALTER TABLE ... DELETE WHERE；
+            //    就地编辑的行删除也依赖这一支（只 ALTER UPDATE 不 ALTER DELETE 等于删不掉行）。
+            let delete = dialect.delete_sql("t", "k = 2");
+            if key == "clickhouse" {
+                assert_eq!(delete, "alter table t delete where k = 2", "{key}");
+                assert!(dialect.row_ops_are_async_mutations(), "{key}: 应标记为异步 mutation");
+            } else {
+                assert!(delete.starts_with("delete from "), "{key}: 标准 DELETE：{delete}");
+                assert!(!dialect.row_ops_are_async_mutations(), "{key}: 不应是异步 mutation");
             }
         }
         assert!(checked >= 10, "至少要覆盖 10 个方言，实际 {checked}");
