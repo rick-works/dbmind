@@ -306,6 +306,13 @@ fn nosql_module(module: &str) -> Router<AppState> {
 }
 
 /// 组装上游兼容路由（不含 state，由 `lib.rs` 统一 `with_state`）。
+/// 任务中心：列出所有终态任务快照（含没点过「后台运行」的任务）。
+/// 前端把它与本地登记的 bgTasks 合并展示，解决「tasks 目录 500 个文件、任务中心只见十几条」。
+async fn list_tasks() -> XResult<Json<serde_json::Value>> {
+    let rows: Vec<serde_json::Value> = blocking(move || Ok(tasks::list_snapshots())).await?;
+    Ok(Json(json!({ "items": rows })))
+}
+
 pub fn routes() -> Router<AppState> {
     let mut router = Router::new()
         .route("/api/connections", get(conn::list).post(conn::create))
@@ -392,6 +399,8 @@ pub fn routes() -> Router<AppState> {
         .route("/api/sync/db", post(sync::db))
         .route("/api/sync/task/{id}", get(sync::status))
         .route("/api/sync/cancel/{taskId}", post(sync::cancel))
+        // 任务中心：扫描所有终态快照，含未点「后台运行」的任务
+        .route("/api/tasks", get(list_tasks))
         // 备份 / 还原：命令行探测与安装引导 + 任务 + 下载
         .route("/api/backup/start", post(backup::start))
         .route("/api/backup/default-dir", get(backup::default_dir))

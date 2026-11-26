@@ -515,6 +515,9 @@ export const syncDb = async (payload) => http.post('/api/sync/db', payload).then
 export const syncTaskStatus = async (taskId) => http.get(`/api/sync/task/${taskId}`).then(r => r.data)
 export const syncCancel = async (taskId) => http.post(`/api/sync/cancel/${taskId}`).then(r => r.data)
 
+/** 任务中心：列出后端所有终态任务快照（含没点过「后台运行」的任务） */
+export const listTasks = () => http.get('/api/tasks').then(r => r.data)
+
 // 数据库备份 / 还原（统一端点 /api/backup）
 export const startBackup = async (payload) => http.post('/api/backup/start', payload).then(r => r.data)
 export const browseBackupDirs = async (path) => http.get('/api/backup/browse-files', { params: { path } }).then(r => r.data)

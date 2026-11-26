@@ -11,7 +11,7 @@
 // 启动顺序：ensureBgTasksStore() 在 MainView 挂载时调一次 —— 库里有就以库为准覆盖本地；
 // 库里没有但本地有（老用户升级），把本地推上库一次。日常读写仍走本地 + 防抖写库。
 import { reactive, watch } from 'vue'
-import { getSettings, putAppSetting } from '../../api'
+import { getSettings, putAppSetting, listTasks } from '../../api'
 
 const KEY = 'dbmind.bgSyncTasks'
 /** app_settings 里的持久键 */
@@ -61,8 +61,12 @@ const load = () => {
 
 export const bgTasks = reactive(load())
 
+/** 只持久化"本机登记"的记录；后端快照的虚拟行（fromSnapshot）只在内存展示，
+ *  不写 localStorage/app_settings —— 否则 500 条会撑爆镜像且每次启动重复合并。 */
+const localOnly = () => bgTasks.filter(x => !x.fromSnapshot)
+
 const persist = () => {
-  try { localStorage.setItem(KEY, JSON.stringify(bgTasks)) } catch { /* 隐私模式忽略 */ }
+  try { localStorage.setItem(KEY, JSON.stringify(localOnly())) } catch { /* 隐私模式忽略 */ }
 }
 
 // ===== 库持久化（见文件头）=====
@@ -72,7 +76,7 @@ const scheduleMirror = () => {
   if (mirrorTimer) clearTimeout(mirrorTimer)
   mirrorTimer = setTimeout(() => {
     mirrorTimer = null
-    try { putAppSetting(DB_KEY, JSON.stringify(bgTasks.slice(0, LIMIT))).catch(() => {}) }
+    try { putAppSetting(DB_KEY, JSON.stringify(localOnly().slice(0, LIMIT))).catch(() => {}) }
     catch { /* 写不进去不影响本机使用 */ }
   }, MIRROR_DELAY)
 }
@@ -91,12 +95,40 @@ export const ensureBgTasksStore = async () => {
       const list = JSON.parse(raw)
       if (Array.isArray(list) && list.length) {
         bgTasks.splice(0, bgTasks.length, ...list.slice(0, LIMIT))
-        return
       }
     }
     // 库里没有 → 本地存量推上去（本地为空时也写个空数组，建立键，避免下次再判）
-    scheduleMirror()
+    if (!bgTasks.length) scheduleMirror()
   } catch { /* 后端未就绪/解析失败：静默，下次挂载再试 */ }
+
+  // **合并后端全部终态快照**（含没点过「后台运行」的任务）——
+  // 用户实测：tasks 目录 500 个 json，任务中心却只显示十几条登记过的。
+  // 快照没有 title，用「类型名 · 任务 id」兜底；本地已有同 id 的保留本地记录（有真标题）。
+  // 状态直接取快照终态并写进 bgStatusMap（由 MainView 播种），避免 500 条每 5 秒轮询。
+  try {
+    const d = await listTasks()
+    const rows = Array.isArray(d?.items) ? d.items : []
+    const have = new Set(bgTasks.map(x => x.id))
+    // 中文类型名（与 bgTaskApi.js 的 KIND_LABEL 口径一致，避免循环 import 这里直接字面量）
+    const kindName = {
+      sync: '数据传输', compare: '数据对比', backup: '数据库备份', restore: '数据库还原',
+      export: '数据导出', dump: 'SQL 转存', import: '数据导入', datagen: '测试数据', runFile: '执行 SQL 文件',
+    }
+    const merged = rows.filter(x => x && x.id && !have.has(x.id)).map(x => ({
+      id: x.id,
+      title: `${kindName[x.kind] || '任务'} · ${x.id}`,
+      kind: x.kind || 'sync',
+      addedAt: x.startedAt || Date.now(),
+      status: x.status || 'success',
+      finishedAt: x.finishedAt || undefined,
+      fromSnapshot: true,
+      snapshot: {
+        status: x.status, rowsRead: x.rowsRead || 0, rowsWritten: x.rowsWritten || 0,
+        rowsFailed: x.rowsFailed || 0, elapsedMs: x.elapsedMs || 0, message: x.message || '',
+      },
+    }))
+    if (merged.length) bgTasks.push(...merged)
+  } catch { /* 后端没就绪 / 老版本没这个接口：不影响本地记录 */ }
 }
 
 export const addBgTask = ({ id, title, kind, mode, connId, database, extra }) => {
@@ -130,7 +162,12 @@ export const addBgTask = ({ id, title, kind, mode, connId, database, extra }) =>
   }
   if (i >= 0) bgTasks.splice(i, 1, item)
   else bgTasks.unshift(item)
-  if (bgTasks.length > LIMIT) bgTasks.splice(LIMIT)
+  // 只裁剪"本机登记"记录：后端合并进来的快照虚拟行不占这个额度（它们在内存里，
+  // 刷新后由后端重新提供）。从尾部往前找第 LIMIT+1 条本地记录，只删它及更旧的本地记录。
+  const locals = bgTasks.map((x, idx) => x.fromSnapshot ? -1 : idx).filter(i => i >= 0)
+  if (locals.length > LIMIT) {
+    for (const idx of locals.slice(LIMIT).reverse()) bgTasks.splice(idx, 1)
+  }
   // **登记即运行**：状态查询没回来之前这条任务就是 running（主界面的徽标/运行列表
   // 只认「明确已知的状态」，不再把未知兜成 running —— 那会让冷启动的 50 条历史
   // 全部假报"正在运行"）。已终态的记录被重复登记时不降级，别把「成功」改回运行中

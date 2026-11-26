@@ -979,6 +979,70 @@ fn ascii_fallback(filename: &str) -> String {
 pub fn stamp() -> String {
     chrono::Local::now().format("%Y%m%d_%H%M%S").to_string()
 }
+/// 扫描 `<home>/tasks/*.json`，列出**所有终态任务快照**（含没点过「后台运行」的）。
+///
+/// 任务中心的历史记录只从前端 `bgTasks` 读（localStorage + app_settings 镜像），
+/// 那些只在**点过后台运行**时才登记 —— 而后端其实给每个终态任务都落了快照
+/// （导入/导出/对比/备份/同步/造数…），用户看到「tasks 目录 500 个文件、任务中心
+/// 却只有十几条」就是这个缺口。本函数把所有快照列出来供前端合并。
+///
+/// 只返回列表需要的精简字段：**不读 result、不返回 logs**（500 份快照全塞进响应会
+/// 几十 MB）。点「查看」时前端再按 id 走既有 probe 接口从磁盘恢复详情。
+/// 字段刻意对齐前端 `bgTasks`：`id / kind / status / startedAt / finishedAt / message / rows*`。
+pub fn list_snapshots() -> Vec<Value> {
+    let dir = task_store_dir();
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut rows: Vec<Value> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() || path.extension().and_then(|x| x.to_str()) != Some("json") {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|x| x.to_str()) else {
+            continue;
+        };
+        // 文件名来自目录扫描，仍走 safe_task_id 白名单挡住异常名字
+        if !safe_task_id(stem) {
+            continue;
+        }
+        let Ok(body) = std::fs::read(&path) else {
+            continue;
+        };
+        let Ok(v) = serde_json::from_slice::<Value>(&body) else {
+            continue;
+        };
+        let task_id = v.get("taskId").and_then(Value::as_str).unwrap_or(stem);
+        let status = v.get("status").and_then(Value::as_str).unwrap_or("success");
+        // 只认终态（与 restore_from_snapshot 同口径）；running 快照不该存在，跳过以防万一
+        if !matches!(status, "success" | "error" | "canceled") {
+            continue;
+        }
+        let num = |k: &str| v.get(k).and_then(Value::as_i64).unwrap_or(0);
+        let started = v.get("startedAtWall").and_then(Value::as_i64).unwrap_or(0);
+        rows.push(json!({
+            "id": task_id,
+            "kind": v.get("kind").and_then(Value::as_str).unwrap_or("sync"),
+            "status": status,
+            "message": v.get("message").and_then(Value::as_str).unwrap_or(""),
+            "startedAt": started,
+            "finishedAt": v.get("finishedAtWall").and_then(Value::as_i64).unwrap_or(0),
+            "elapsedMs": num("elapsedMs"),
+            "rowsRead": num("rowsRead"),
+            "rowsWritten": num("rowsWritten"),
+            "rowsFailed": num("rowsFailed"),
+            "fromSnapshot": true,
+        }));
+    }
+    // 按开始时间倒序（前端分页直接切片）
+    rows.sort_by(|a, b| {
+        b.get("startedAt").and_then(Value::as_i64).unwrap_or(0)
+            .cmp(&a.get("startedAt").and_then(Value::as_i64).unwrap_or(0))
+    });
+    rows
+}
+
 
 #[cfg(test)]
 mod ttl_tests {
