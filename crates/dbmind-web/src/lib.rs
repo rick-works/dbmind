@@ -782,7 +782,9 @@ pub fn build_router(state: AppState, dist: Option<PathBuf>) -> Router {
         .route("/schema-cache", delete(clear_all_schema_cache))
         .route("/cache", get(cache_list).post(cache_clear))
         .route("/settings", get(list_settings))
-        .route("/settings/{key}", put(put_setting))
+        // 任务记录/问数历史的持久层走这里（app_settings），单条可能含大量日志/结果样本；
+        // axum 默认 2MB 会让 200 条任务记录 PUT 失败（静默吞错 = 换端口后恢复不了）
+        .route("/settings/{key}", put(put_setting).layer(DefaultBodyLimit::max(32 * 1024 * 1024)))
         .route("/config/export", get(export_config))
         .route("/config/import", post(import_config));
 

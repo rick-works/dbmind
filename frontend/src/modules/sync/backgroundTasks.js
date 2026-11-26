@@ -1,9 +1,25 @@
 // 数据传输的**后台任务**注册表：
 // 对话框点「后台运行」后任务在后端继续跑，这里记下 taskId 让顶栏任务中心能找回它。
-// 列表持久化到 localStorage（页面刷新后仍能看到），状态由任务中心打开时实时查询。
+//
+// 持久化分两层：
+//  - localStorage（KEY）：本端口下的即时缓存，同步读写、响应快
+//  - dbmind.db 的 app_settings（DB_KEY）：**真正的持久层**（跨端口/换机器都在）。
+//    桌面壳窗口地址是 http://127.0.0.1:<端口>，端口每次启动可能变，localStorage 按
+//    origin 隔离 —— 只存本地的话，换端口后任务中心就"凭空空了"（问数历史踩过同一个坑）。
+//    列表全量（含 snapshot/logs/result）都镜像到库里，点「查看」能还原当时的结果。
+//
+// 启动顺序：ensureBgTasksStore() 在 MainView 挂载时调一次 —— 库里有就以库为准覆盖本地；
+// 库里没有但本地有（老用户升级），把本地推上库一次。日常读写仍走本地 + 防抖写库。
 import { reactive, watch } from 'vue'
+import { getSettings, putAppSetting } from '../../api'
 
 const KEY = 'dbmind.bgSyncTasks'
+/** app_settings 里的持久键 */
+const DB_KEY = 'tasks.bgTasks'
+/** 任务记录上限（本地 + 库一致）：用户嫌 50 条太少，放宽到 200 */
+const LIMIT = 200
+/** 写库防抖：5 秒轮询的状态刷新不该每次都 PUT，合并成一次 */
+const MIRROR_DELAY = 800
 
 /**
  * `A.库 → C.库`（两端库名相同）→ `A → C / 库`。
@@ -49,6 +65,40 @@ const persist = () => {
   try { localStorage.setItem(KEY, JSON.stringify(bgTasks)) } catch { /* 隐私模式忽略 */ }
 }
 
+// ===== 库持久化（见文件头）=====
+let mirrorTimer = null
+/** 防抖写库：列表全量照搬（含 snapshot/logs/result），不再二次裁剪 —— 用户要的是"能还原当时结果" */
+const scheduleMirror = () => {
+  if (mirrorTimer) clearTimeout(mirrorTimer)
+  mirrorTimer = setTimeout(() => {
+    mirrorTimer = null
+    try { putAppSetting(DB_KEY, JSON.stringify(bgTasks.slice(0, LIMIT))).catch(() => {}) }
+    catch { /* 写不进去不影响本机使用 */ }
+  }, MIRROR_DELAY)
+}
+
+/**
+ * 启动时把库里的任务记录找回来：
+ *  - 本地为空、库里有：灌回本地（换端口场景）
+ *  - 本地有、库里没有：把本地推上库（老用户首次升级）
+ *  - 两边都有：**以库为准**（库是跨端口的唯一真相）
+ */
+export const ensureBgTasksStore = async () => {
+  try {
+    const all = (await getSettings()) || {}
+    const raw = all[DB_KEY]
+    if (raw) {
+      const list = JSON.parse(raw)
+      if (Array.isArray(list) && list.length) {
+        bgTasks.splice(0, bgTasks.length, ...list.slice(0, LIMIT))
+        return
+      }
+    }
+    // 库里没有 → 本地存量推上去（本地为空时也写个空数组，建立键，避免下次再判）
+    scheduleMirror()
+  } catch { /* 后端未就绪/解析失败：静默，下次挂载再试 */ }
+}
+
 export const addBgTask = ({ id, title, kind, mode, connId, database, extra }) => {
   if (!id) return
   const i = bgTasks.findIndex(x => x.id === id)
@@ -80,7 +130,7 @@ export const addBgTask = ({ id, title, kind, mode, connId, database, extra }) =>
   }
   if (i >= 0) bgTasks.splice(i, 1, item)
   else bgTasks.unshift(item)
-  if (bgTasks.length > 50) bgTasks.splice(50)
+  if (bgTasks.length > LIMIT) bgTasks.splice(LIMIT)
   // **登记即运行**：状态查询没回来之前这条任务就是 running（主界面的徽标/运行列表
   // 只认「明确已知的状态」，不再把未知兜成 running —— 那会让冷启动的 50 条历史
   // 全部假报"正在运行"）。已终态的记录被重复登记时不降级，别把「成功」改回运行中
@@ -139,5 +189,5 @@ export const setBgTaskStatus = (id, status, snapshot) => {
   }
 }
 
-// 列表变化即持久化（统一在这里写 localStorage，不用每处手写）
-watch(bgTasks, persist, { deep: true })
+// 列表变化即持久化：本地同步写（即时），库里防抖写（跨端口）
+watch(bgTasks, () => { persist(); scheduleMirror() }, { deep: true })

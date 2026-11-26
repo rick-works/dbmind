@@ -804,7 +804,7 @@ impl Store {
     pub fn table_row_count(&self, table: &str) -> Result<u64> {
         const ALLOWED: &[&str] = &[
             "schema_cache", "query_history", "ai_audit", "ai_usage_days",
-            "ai_usage_models", "kb_docs", "kb_vectors",
+            "ai_usage_models", "ai_requests", "kb_docs", "kb_vectors",
         ];
         if !ALLOWED.contains(&table) {
             return Err(DbMindError::new(

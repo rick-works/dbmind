@@ -12,23 +12,22 @@
  * <p>为什么要裁剪行：一次分组查询可能返回上千行，原样塞 localStorage 会顶到 5MB 配额，
  * 导致后续写入直接失败。这里每轮只留前 200 行 —— 回看历史时够看，又不至于把存储撑爆。
  *
- * <p>**另存一份到 dbmind.db（app_settings 的 `ai.askhistory`）**：桌面壳的窗口地址是
- * `http://127.0.0.1:<端口>`，端口每次启动可能不同，localStorage 又按 origin 隔离 ——
- * 关掉重开，记录里的问数对话就"凭空消失"（2026-11-19 用户实测反馈）。
- * 这份镜像只用于**换端口后把记录找回来**（只留最近若干条、每轮只留若干行），
- * 日常读写仍走 localStorage（同步、快）。
+ * <p>**dbmind.db 的 app_settings（`ai.askhistory`）才是持久层**：桌面壳窗口地址是
+ * `http://127.0.0.1:<端口>`，端口每次启动可能变，localStorage 按 origin 隔离 —— 只存本地
+ * 的话换端口后记录"凭空消失"（2026-11-19 用户实测）。库里存最近 200 条、每轮 200 行，
+ * 启动时**以库为准**覆盖本地；localStorage 保留同样上限做即时缓存（同步、快）。
  */
 import { getSettings, putAppSetting } from '../../api'
 
 const KEY = 'dbmind.ask.history.v1'
 /** 镜像到库里的键（跨端口恢复用） */
 const DB_KEY = 'ai.askhistory'
-/** 镜像只留这么多条 / 每条这么多轮 / 每轮这么多行：它只是"找回来"的底，不是全文备份 */
-const MIRROR_RECORDS = 20
-const MIRROR_TURNS = 10
-const MIRROR_ROWS = 50
+/** 库持久层上限：用户嫌 40 条太少，放宽到 200；每轮留 200 行不变（再多 localStorage 会顶到配额） */
+const MIRROR_RECORDS = 200
+const MIRROR_TURNS = 20
+const MIRROR_ROWS = 200
 const MIRROR_DELAY = 800
-const LIMIT = 40
+const LIMIT = 200
 const KEEP_ROWS = 200
 
 const read = () => {
@@ -75,18 +74,24 @@ const scheduleMirror = (list) => {
 }
 
 /**
- * 换端口后把记录找回来：本地为空、库里有时灌回去（只灌一次，本地有内容就不动）。
- * 面板挂载时调一次；后端没就绪时静默失败，下次再试。
+ * 启动时对齐持久层：库里有就以库为准覆盖本地（换端口后本地可能为空或陈旧）；
+ * 库里没有就把本地存量推上库（老用户升级）。面板挂载时调一次；后端没就绪时静默失败，下次再试。
  */
 export const ensureAskHistoryStore = async () => {
-  if (read().length) return
   try {
     const all = (await getSettings()) || {}
     const raw = all[DB_KEY]
-    if (!raw) return
-    const list = JSON.parse(raw)
-    if (!Array.isArray(list) || !list.length) return
-    localStorage.setItem(KEY, JSON.stringify(list.slice(0, LIMIT)))
+    if (raw) {
+      const list = JSON.parse(raw)
+      if (Array.isArray(list) && list.length) {
+        // 库里有 → 以库为准（它是跨端口的唯一真相；本地可能是另一个端口的陈旧缓存）
+        localStorage.setItem(KEY, JSON.stringify(list.slice(0, LIMIT)))
+        return
+      }
+    }
+    // 库里没有、本地有 → 把本地推上库（老用户升级），建立持久层
+    const local = read()
+    if (local.length) scheduleMirror(local)
   } catch { /* 解析失败 / 存储不可用：当作没有备份 */ }
 }
 

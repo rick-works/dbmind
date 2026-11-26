@@ -1399,7 +1399,7 @@ import { t, tMsg } from '../../utils/i18n'
 import { loadShortcuts, matchesShortcut, isShortcutSuppressed } from '../../utils/shortcuts'
 import { hasVisibleOverlay } from '../../utils/useShortcuts'
 import { openExternal } from '../../utils/externalLinks'
-import { bgTasks, addBgTask, removeBgTask, clearBgTasks, setBgTaskStatus } from '../sync/backgroundTasks'
+import { bgTasks, addBgTask, removeBgTask, clearBgTasks, setBgTaskStatus, ensureBgTasksStore } from '../sync/backgroundTasks'
 // 后台任务的类型分派（状态 / 取消 / 文案 / 能否就地还原）：一处 switch，别再在界面里写第二份
 import { bgKindKey, bgKindClassOf, bgKindStopMsg, bgKindRunningKey, bgTaskStatus, bgTaskCancel, bgIsTerminal, bgInlineResumable, bgHasArtifact } from '../sync/bgTaskApi'
 import { Coin, Refresh, Setting, SetUp, Plus, Folder, FolderAdd, Grid, View, Mouse, Switch, Promotion, Search, Operation, BellFilled, Timer, DocumentRemove, Document, DocumentCopy, Download, Upload, ArrowRight, ArrowLeft, ArrowUp, Expand, Fold, Edit, Delete, Connection, FolderOpened, CopyDocument, EditPen, Cpu, CircleClose, Close, SwitchButton, Loading, User, UserFilled, CollectionTag, Collection, ArrowDown, DataAnalysis, Monitor, Stopwatch, VideoPlay } from '@element-plus/icons-vue'
@@ -2510,7 +2510,10 @@ watch(() => bgTasks.length, (n) => {
   if (bgPage.value > maxPage) bgPage.value = maxPage
 })
 // 挂载后拉一次 + 每 5 秒刷新（任务少，几个请求的事），徽标才「活」
-onMounted(() => {
+onMounted(async () => {
+  // **先从 dbmind.db 恢复任务记录**（跨端口真正的持久层），再播种状态/刷接口 ——
+  // 顺序不能反：否则拿的是旧端口 localStorage 里的陈旧列表（换端口后可能是空的）
+  try { await ensureBgTasksStore() } catch { /* 后端未就绪：沿用本地缓存 */ }
   // 冷启动先把**留底的状态**搬进内存：上次退出前已终态的记录立刻显示终态，
   // 不用等第一轮轮询 —— 关窗检查也据此不再把它们算成"正在运行"
   for (const t of bgTasks) if (t.status) bgStatusMap.value[t.id] = t.status
