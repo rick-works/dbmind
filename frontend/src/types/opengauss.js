@@ -14,6 +14,7 @@ export default {
   webScheme: 'opengauss',
   formatDialect: 'postgresql',
   canDropDatabase: true,
+  canCreateSchema: true,
   // 有 pg_terminate_backend（实测），删库前可以先踢掉占着该库的会话
   dropDbKickSessions: true,
   // 上游兼容接口的模块路径段：与 plugins/connection-types/opengauss.yaml 的 dialect 派生值一致（guard 校验）
@@ -31,8 +32,9 @@ export default {
   databasePh: 'cd.dbPhOptional',
   // PG 系驱动要求 URL 有路径段，库名空着也保留 `/`
   keepEmptyDbSlash: true,
-  // openGauss 官方 JDBC（PG 驱动分叉），认同一套连接属性；默认值见 postgresql.js 的注释
-  urlTemplate: 'jdbc:opengauss://{host}:{port}/{database}?sslmode=prefer&reWriteBatchedInserts=true&stringtype=unspecified&tcpKeepAlive=true',
+  // 必须与 plugins/connection-types/opengauss.yaml 逐字一致 —— 后端真正用它渲染 JDBC URL。
+  // openGauss fork 在容器/远程直连时 SSL 协商会卡死（08P01），只认精简参数。
+  urlTemplate: 'jdbc:opengauss://{host}:{port}/{database}?sslmode=disable',
   options: pgFamilyOptions(),
   dropParams: ['ApplicationName', 'sslmode', 'currentSchema', 'reWriteBatchedInserts',
     'stringtype', 'tcpKeepAlive'],

@@ -24,8 +24,9 @@ jdbc:
   # ⚠️ 刻意用 8.0.28，而不是跟 MySQL 一样的 9.1.0：
   #    8.0.31 起驱动改了坐标（com.mysql:mysql-connector-j）与字符集解析，对 Doris 的握手
   #    会误判服务端字符集编号，连接直接失败并报 `Unknown character set: 'eucjpms'`（实测）。
-  #    Doris 官方长期推荐的也是 8.0.28 这一代；注意它用的是老坐标 mysql:mysql-connector-java。
-  artifact: mysql:mysql-connector-java:8.0.28
+  #    Doris 与 MySQL 共享 doris 驱动目录，必须与 StarRocks/SelectDB 同坐标同文件：
+  #    老驱动 8.0.28 不认 Doris 返回的 charset 名（Unknown character set: 'eucjpms'）。
+  artifact: com.mysql:mysql-connector-j:9.1.0
 traits:
   singleDatabase: false
   schemaAware: true

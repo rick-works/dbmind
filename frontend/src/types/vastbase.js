@@ -11,6 +11,7 @@ export default {
   webScheme: 'postgres',
   formatDialect: 'postgresql',
   canDropDatabase: true,
+  canCreateSchema: true,
   dropDbKickSessions: true,
   // 与 plugins/connection-types/vastbase.yaml 的 dialect 派生值一致（guard 校验）
   module: 'postgresql',

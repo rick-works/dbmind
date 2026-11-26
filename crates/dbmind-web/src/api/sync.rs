@@ -1218,9 +1218,18 @@ async fn source_table_rows(
     kind: Dialect,
 ) -> std::collections::HashMap<String, i64> {
     let mut out = std::collections::HashMap::new();
-    let (database, schema) = match src.scope.split_once('.') {
-        Some((db, schema)) => (db.to_string(), schema.to_string()),
-        None => (src.scope.clone(), "public".to_string()),
+    // 只有「库.模式」两级的方言才拆第一个点。Doris 的 `catalog.库`、ClickHouse 的
+    // 字面带点库名都是**一个库名**，拆开会把 catalog 当库去查 information_schema，
+    // 估算恒空（静默退化成清单原序）。整串交给方言自己的估算实现处理。
+    let (database, schema) = if kind.is_schema_aware() {
+        match src.scope.split_once('.') {
+            Some((db, schema)) if !db.is_empty() && !schema.is_empty() => {
+                (db.to_string(), schema.to_string())
+            }
+            _ => (src.scope.clone(), "public".to_string()),
+        }
+    } else {
+        (src.scope.clone(), "public".to_string())
     };
     // 各方言的估算语句收在 `DialectOps::table_rows_estimate_sql()` 里
     // （金仓的 `pg_*` → `sys_*` 改名也归它自己处理）。
@@ -2965,11 +2974,17 @@ pub(crate) fn literal_for(cell: &CellValue, dialect: Dialect, target_type: Optio
             let boolean = match cell {
                 CellValue::Integer(value) => Some(*value != 0),
                 CellValue::Real(value) => Some(*value != 0.0),
-                CellValue::Decimal(value) | CellValue::Text(value) => match value.trim() {
-                    "0" | "false" | "FALSE" => Some(false),
-                    "1" | "true" | "TRUE" => Some(true),
-                    _ => None,
-                },
+                CellValue::Decimal(value) | CellValue::Text(value) => {
+                    // 布尔文本大小写与常见缩写都要认（数据源里 0/1、t/f、yes/no、Y/N、
+                    // on/off 都在用）。漏认时落到下面的兜底会把 "false" 当文本写进
+                    // boolean 列 —— 各库报错形态不同，但整批同步必失败。
+                    let v = value.trim().to_ascii_lowercase();
+                    match v.as_str() {
+                        "0" | "false" | "f" | "no" | "n" | "off" => Some(false),
+                        "1" | "true" | "t" | "yes" | "y" | "on" => Some(true),
+                        _ => None,
+                    }
+                }
                 _ => None,
             };
             if let Some(boolean) = boolean {
@@ -4892,6 +4907,16 @@ async fn direct_source_ref(
             tracing::debug!(table, %left, %right, "两个连接不是同一实例，走管道传输");
             return None;
         }
+    }
+    // PG 族（DirectRefDepth::Schema）的指纹是 cluster 级：同一实例不同 database 相同，
+    // 但 PG 无法在一条会话里跨库查询。直拷 SQL 发在「已解析到目标库」的会话上，
+    // scope 不同就会读成目标库自己的同名表 —— 探测也能过，最后变成自己拷自己、静默丢数据。
+    if matches!(source_kind.direct_ref_depth(), DirectRefDepth::Schema)
+        && !src.scope.trim().eq_ignore_ascii_case(tgt.scope.trim())
+    {
+        tracing::debug!(table, src = %src.scope, tgt = %tgt.scope,
+            "同实例但跨库，直拷会读成目标库自己的表，走管道传输");
+        return None;
     }
     // 用户已经把全限定名写进表名（`库.模式.表`）时不再拼前缀
     if table.contains('.') {
@@ -8048,6 +8073,25 @@ mod prepared_batch_tests {
             literal_for(&CellValue::Decimal("0".into()), pg, Some("boolean")),
             "false"
         );
+    }
+
+    #[test]
+    fn 布尔列的常见文本写法都按布尔落库() {
+        let pg = Dialect::new(ConnectionKind::Postgresql);
+        for text in ["0", "false", "FALSE", "f", "no", "N", "off"] {
+            assert_eq!(
+                literal_for(&CellValue::Text(text.into()), pg, Some("boolean")),
+                "false",
+                "输入 {text} 应识别为 false"
+            );
+        }
+        for text in ["1", "true", "TRUE", "t", "yes", "Y", "on"] {
+            assert_eq!(
+                literal_for(&CellValue::Text(text.into()), pg, Some("boolean")),
+                "true",
+                "输入 {text} 应识别为 true"
+            );
+        }
     }
 }
 

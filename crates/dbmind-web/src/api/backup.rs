@@ -1770,6 +1770,23 @@ async fn builtin_backup(
     })
 }
 
+/// PG 的 `pg_get_triggerdef` 形如 `CREATE TRIGGER x AFTER INSERT ON [schema.]tbl FOR EACH …`
+/// （语句级触发器没有 `FOR EACH`，直接 `… EXECUTE FUNCTION …`）。
+/// `DROP TRIGGER x` 在 PG 系是语法错 —— 必须带 `ON <表>`。表名只有拿到定义后才知道，
+/// 这里从定义里取 `ON` 之后的引用；取不到返回 None，让调用方**不写 DROP**（写错 SQL 更糟）。
+fn pg_trigger_table_ref(definition: &str) -> Option<String> {
+    let upper = definition.to_ascii_uppercase();
+    let start = upper.find(" ON ")? + 4;
+    let after = &definition[start..];
+    let after_upper = after.to_ascii_uppercase();
+    let end = [" FOR EACH ", " EXECUTE "]
+        .iter()
+        .filter_map(|needle| after_upper.find(needle))
+        .min()?;
+    let table = after[..end].trim();
+    (!table.is_empty()).then(|| table.to_string())
+}
+
 /// 把一组对象（视图 / 函数 / 存储过程 / 触发器 / 事件）的定义写进备份文件，返回成功导出的个数。
 ///
 /// 定义来自 `dialect.object_source`（与「查看定义」**同一条查询**），选列规则同 `pick_ddl`
@@ -1814,6 +1831,8 @@ async fn export_objects(
     let mut exported = 0u64;
     let mut skipped = 0u64;
     let mut unsupported: Option<&'static str> = None;
+    // PG 系的 `DROP TRIGGER` 必须带 `ON <表>`，且表名只有拿到定义后才知道 —— 延后生成。
+    let pg_trigger = kind == "trigger" && dialect.kind.dialect() == "PostgreSQL";
     for name in &names {
         task.check_canceled().map_err(XError::internal)?;
         // 与表同款：勾了「含 DROP」先删旧对象 —— CREATE VIEW / 例程不带 OR REPLACE，
@@ -1825,7 +1844,8 @@ async fn export_objects(
             let quoted = dialect.quote(name);
             let drop_sql = match (kind, dialect.kind.key()) {
                 ("view", _) => Some(format!("drop view if exists {quoted}")),
-                ("trigger", _) => Some(format!("drop trigger if exists {quoted}")),
+                // PG 系延后到拿到定义后按 `ON <表>` 生成（见下方 pg_trigger 分支）
+                ("trigger", _) if !pg_trigger => Some(format!("drop trigger if exists {quoted}")),
                 ("event", _) => Some(format!("drop event if exists {quoted}")),
                 ("function", "mysql" | "mariadb" | "doris" | "tidb" | "oceanbase") => {
                     Some(format!("drop function if exists {quoted}"))
@@ -1864,6 +1884,21 @@ async fn export_objects(
                     skipped += 1;
                     notices.push(format!("{label} {name} 的定义没取到，未导出"));
                     continue;
+                }
+                // PG 触发器：定义里带表引用，DROP 必须 `on <表>`，否则还原必报语法错
+                if include_drop && pg_trigger {
+                    match pg_trigger_table_ref(&definition) {
+                        Some(table) => writeln!(
+                            out,
+                            "drop trigger if exists {} on {};",
+                            dialect.quote(name),
+                            table
+                        )
+                        .map_err(|e| XError::internal(e.to_string()))?,
+                        None => notices.push(format!(
+                            "触发器 {name} 的定义里找不到 ON <表>，未生成 DROP（重复还原时需先手工删除）"
+                        )),
+                    }
                 }
                 writeln!(out, "{};", definition.trim().trim_end_matches(';'))
                     .map_err(|e| XError::internal(e.to_string()))?;
@@ -2428,6 +2463,27 @@ pub async fn download(State(state): State<AppState>, Path(task_id): Path<String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pg_触发器定义能取出表引用() {
+        assert_eq!(
+            pg_trigger_table_ref(
+                "CREATE TRIGGER trg AFTER INSERT ON public.orders FOR EACH ROW EXECUTE FUNCTION f()"
+            )
+            .as_deref(),
+            Some("public.orders")
+        );
+        // 语句级触发器没有 FOR EACH，终止标记是 EXECUTE
+        assert_eq!(
+            pg_trigger_table_ref(
+                "CREATE TRIGGER trg AFTER INSERT ON \"My Schema\".\"Orders\" EXECUTE FUNCTION f()"
+            )
+            .as_deref(),
+            Some("\"My Schema\".\"Orders\"")
+        );
+        // 解析不出来必须返回 None，让调用方不写 DROP（写错 SQL 更糟）
+        assert_eq!(pg_trigger_table_ref("CREATE TRIGGER trg AFTER INSERT"), None);
+    }
 
     fn merge(stmts: &[&str], kind: &str) -> Vec<String> {
         merge_single_row_inserts(stmts.iter().map(|s| s.to_string()).collect(), kind).0

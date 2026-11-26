@@ -531,8 +531,10 @@ impl DialectOps for DorisOps {
     }
 
     fn table_rows_estimate_sql(&self, database: &str, _schema: &str) -> Option<String> {
-        // Doris 的 `information_schema.tables` 与 MySQL 同名同列，直接共用口径
-        let db = database.replace('\'', "''");
+        // Doris 的 `information_schema.tables` 与 MySQL 同名同列，直接共用口径。
+        // `catalog.库` 里的 catalog 不是库名 —— 与同文件 table_rows_sql 一样先剥掉，
+        // 否则 `table_schema = 'catalog'` 一条都匹配不到，整库同步排序静默退化成原序。
+        let db = bare_database(database).replace('\'', "''");
         Some(format!(
             "select table_name as t, table_rows as n from information_schema.tables \
              where table_schema = '{db}'"

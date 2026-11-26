@@ -142,7 +142,9 @@ impl DialectOps for SqlServerOps {
                         where fkc2.constraint_object_id = fk.object_id \
                         order by fkc2.constraint_column_id for xml path(''), type).value('.', 'nvarchar(max)'), 1, 0, '') + ')' + \
                  case fk.delete_referential_action when 1 then ' on delete cascade' \
-                      when 2 then ' on delete set null' when 3 then ' on delete set default' else '' end + ';' \
+                      when 2 then ' on delete set null' when 3 then ' on delete set default' else '' end + \
+                 case fk.update_referential_action when 1 then ' on update cascade' \
+                      when 2 then ' on update set null' when 3 then ' on update set default' else '' end + ';' \
                from sys.foreign_keys fk \
                join sys.tables t on t.object_id = fk.parent_object_id \
                join sys.tables rt on rt.object_id = fk.referenced_object_id \

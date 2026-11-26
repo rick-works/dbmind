@@ -38,7 +38,8 @@ capabilities:
   databaseCreate: false
   fieldLineage: false
   sqlExplain: true
-  userAdmin: true
+  # 达梦用户管理暂未实现方言 user_action_sql，声明为不支持以免 UI 误报
+  userAdmin: false
   driverManagement: true
 # 达梦用自家的 dexp/dimp（不是 Oracle 的 expdp），所以不继承 Oracle 那一段。
 backup:

@@ -27,7 +27,8 @@ capabilities:
   queryExecution: true
   metadataBrowse: true
   objectBrowser: true
-  objectSource: true
+  # object_source 方言未实现（默认 Unwritten），声明 false 与 /features 对齐
+  objectSource: false
   schemaSearch: true
   diagram: true
   tableDataEdit: true

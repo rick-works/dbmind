@@ -39,5 +39,6 @@ capabilities:
   databaseCreate: false
   fieldLineage: false
   sqlExplain: true
-  userAdmin: true
+  # 用户由数据库外部认证提供，方言没有 user_action_sql 实现（与 manifest/UI 对齐）
+  userAdmin: false
   driverManagement: true

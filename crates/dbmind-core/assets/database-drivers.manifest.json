@@ -59,7 +59,7 @@
         "fieldLineage": false,
         "metadataBrowse": true,
         "objectBrowser": true,
-        "objectSource": true,
+        "objectSource": false,
         "queryExecution": true,
         "schemaSearch": true,
         "sqlExplain": true,
@@ -704,7 +704,7 @@
         "tableDataEdit": true,
         "tableImport": true,
         "tableStructureEdit": true,
-        "userAdmin": true
+        "userAdmin": false
       },
       "defaultPort": 50000,
       "dialect": "Db2",
@@ -749,7 +749,7 @@
         "fieldLineage": false,
         "metadataBrowse": true,
         "objectBrowser": true,
-        "objectSource": true,
+        "objectSource": false,
         "queryExecution": true,
         "schemaSearch": true,
         "sqlExplain": true,
@@ -810,7 +810,7 @@
         "tableDataEdit": true,
         "tableImport": true,
         "tableStructureEdit": true,
-        "userAdmin": true
+        "userAdmin": false
       },
       "defaultPort": 5236,
       "dialect": "Oracle",
@@ -924,9 +924,9 @@
       "driverStoreVisible": true,
       "exposed": true,
       "jdbc": {
-        "artifact": "mysql:mysql-connector-java:8.0.28",
+        "artifact": "com.mysql:mysql-connector-j:9.1.0",
         "artifacts": [
-          "mysql:mysql-connector-java:8.0.28"
+          "com.mysql:mysql-connector-j:9.1.0"
         ],
         "driverClass": "com.mysql.cj.jdbc.Driver",
         "urlTemplate": "jdbc:mysql://{host}:{port}/{database}?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&connectTimeout=10000&socketTimeout=600000&rewriteBatchedStatements=true&useCursorFetch=true&zeroDateTimeBehavior=CONVERT_TO_NULL&allowMultiQueries=true"
@@ -1030,9 +1030,9 @@
       "driverStoreVisible": true,
       "exposed": false,
       "jdbc": {
-        "artifact": "mysql:mysql-connector-java:8.0.28",
+        "artifact": "com.mysql:mysql-connector-j:9.1.0",
         "artifacts": [
-          "mysql:mysql-connector-java:8.0.28"
+          "com.mysql:mysql-connector-j:9.1.0"
         ],
         "driverClass": "com.mysql.cj.jdbc.Driver",
         "urlTemplate": "jdbc:mysql://{host}:{port}/{database}?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&connectTimeout=10000&socketTimeout=600000&rewriteBatchedStatements=true&useCursorFetch=true&zeroDateTimeBehavior=CONVERT_TO_NULL&allowMultiQueries=true"

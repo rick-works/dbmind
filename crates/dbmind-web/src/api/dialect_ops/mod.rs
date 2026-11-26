@@ -864,6 +864,12 @@ impl UpsertParts {
 }
 
 /// 三个入参有一个为空就没有 upsert 可言（调用方也不会发这种请求）。
+///
+/// 另外两个**必须在这一层挡住**的越界：
+/// - `key_indexes` 指向不存在的列 ⇒ `quoted[*i]` panic；
+/// - 某一行的列数与 `columns` 不等 ⇒ Oracle/DM 的 MERGE 用 `row[i]` 按列号取值，
+///   短一行就直接 `index out of bounds`（行数来自外部数据源，脏数据完全可能少列）。
+/// 返回 `None` 会让上层这条 upsert 不生成语句并明确报错，绝不让同步协程 panic。
 pub(crate) fn upsert_parts(
     ops: &dyn DialectOps,
     columns: &[String],
@@ -871,6 +877,11 @@ pub(crate) fn upsert_parts(
     rows: &[Vec<String>],
 ) -> Option<UpsertParts> {
     if rows.is_empty() || columns.is_empty() || key_indexes.is_empty() {
+        return None;
+    }
+    if key_indexes.iter().any(|i| *i >= columns.len())
+        || rows.iter().any(|row| row.len() != columns.len())
+    {
         return None;
     }
     let quoted: Vec<String> = columns.iter().map(|c| ops.quote(c)).collect();
@@ -1133,6 +1144,19 @@ pub(crate) fn comment_on_statements(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upsert_入参越界时直接放弃而不panic() {
+        let ops = of(ConnectionKind::Oracle);
+        let cols = vec!["id".to_string(), "name".to_string()];
+        let good = vec!["1".to_string(), "'a'".to_string()];
+        // key 下标越界
+        assert!(upsert_parts(ops, &cols, &[9], &[good.clone()]).is_none());
+        // 行长度与列数不等（Oracle 的 MERGE 按 row[i] 取值，短一行就 panic）
+        assert!(upsert_parts(ops, &cols, &[0], &[vec!["1".to_string()]]).is_none());
+        // 正常入参照常产出
+        assert!(upsert_parts(ops, &cols, &[0], &[good]).is_some());
+    }
 
     /// 注册表必须覆盖所有已声明的类型 —— 漏了就会静默退化成 GenericOps
     /// （症状是「这个库突然不支持原生 upsert 了」，而且没人会想到是注册表漏项）。

@@ -812,7 +812,9 @@ impl Writer for SqlWriter {
                     &self.key_indexes,
                     self.kind,
                 );
-                match crate::api::sync::run_target(&self.state, &self.tgt_target, &sql).await {
+                // 必须发到本表专属的 usid：上面为它开了事务（update_txn_open），
+                // 用 run_target 会落到共享的 internal:browse 会话，事务空转、并发多表排队。
+                match run_target_in(&self.state, &self.tgt_target, &sql, &usid).await {
                     Ok(_) => ok += 1,
                     Err(err) => {
                         failed += 1;

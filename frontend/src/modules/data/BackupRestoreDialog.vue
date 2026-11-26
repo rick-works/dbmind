@@ -640,8 +640,10 @@ const engineLabel = computed(() => {
 
 // ⚠️ 第二个参数是**内部协议值**（fill 里用 kind === '还原' 判断要不要填文件路径），
 // 只用于比对、不上屏 —— 所以它**不翻译**：翻了判断条件就永远不成立，预览里的文件路径会消失。
-const previewDump = computed(() => fill(guide.value && guide.value.dumpHint, t('qa.exportBtn')))
-const previewRestore = computed(() => fill(guide.value && guide.value.restoreHint, t('bk.restore')))
+const FILL_KIND_DUMP = '__dump__'
+const FILL_KIND_RESTORE = '__restore__'
+const previewDump = computed(() => fill(guide.value && guide.value.dumpHint, FILL_KIND_DUMP))
+const previewRestore = computed(() => fill(guide.value && guide.value.restoreHint, FILL_KIND_RESTORE))
 
 function fill(tpl, kind) {
   if (!tpl) return ''
@@ -649,7 +651,7 @@ function fill(tpl, kind) {
   const host = guide.value?.host || t('bkp.phServer')
   const user = guide.value?.username || t('bkp.phUser')
   const port = guide.value?.port || defaultPort.value || t('bkp.phPort')
-  const filePath = kind === '还原'
+  const filePath = kind === FILL_KIND_RESTORE
     ? (file.value || t('bkp.phBackupFile'))
     : t('bkp.phBackupFile')
   const sqliteFile = guide.value?.sqliteFile || t('bkp.phSqliteFile')

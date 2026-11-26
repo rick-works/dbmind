@@ -1109,7 +1109,7 @@ fn pg_ddl(ops: &dyn DialectOps, table: &str, schema: Option<&str>) -> Meta {
     Meta::Sql(format!(
         "select 'create view ' || quote_ident(relname) || ' as' || chr(10) || pg_get_viewdef(oid) as ddl \
          from pg_class where relname = {lit} and relkind = 'v' \
-           and relnamespace = (select oid from pg_namespace where nspname = current_schema()) \
+           and relnamespace = (select oid from pg_namespace where nspname = {ns}) \
          union all \
          select 'create table ' || quote_ident(c.relname) || ' (' || chr(10) || \
          string_agg( \

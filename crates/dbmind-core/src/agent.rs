@@ -1772,9 +1772,16 @@ pub fn render_jdbc_url(template: &str, config: &ConnectionConfig) -> Result<Stri
     // 反而像少写了库名。**例外是 pgjdbc 系（PG / Kingbase）**：它的 URL 语法要求必须
     // 有路径段，`jdbc:postgresql://h:5432?x=y` 会直接报 Unable to parse URL，
     // 只能保留 `/`（`...:5432/?x=y` 合法）。前端 jdbc.js 按同一规则出预览。
+    // pgjdbc 系都要求 URL 有路径段：4 个 PG 分支品牌（HighGo/Vastbase/openGauss/RisingWave）
+    // 的前端 types 都声明了 keepEmptyDbSlash，后端漏配会让库名留空时渲染出无法解析的 URL。
     let keep_db_slash = matches!(
         config.kind,
-        ConnectionKind::Postgresql | ConnectionKind::Kingbase
+        ConnectionKind::Postgresql
+            | ConnectionKind::Kingbase
+            | ConnectionKind::Highgo
+            | ConnectionKind::Vastbase
+            | ConnectionKind::Opengauss
+            | ConnectionKind::Risingwave
     );
     if !keep_db_slash
         && config

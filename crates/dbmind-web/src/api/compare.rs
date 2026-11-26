@@ -902,6 +902,11 @@ fn keyset_literal(part: &shape::SortPart, dialect: Dialect, column_is_time: bool
     match part {
         shape::SortPart::Null => "null".to_string(),
         shape::SortPart::Num(v) => v.to_sql_literal(),
+        shape::SortPart::Time(t) if !column_is_time => {
+            // 文本列里存 ISO 时间戳：库按字符串序比较，必须用库里原样值（保留 T）。
+            // 早先用 keyset_time_literal 把 T 换成空格，边界行 '"…T…"' > '"… …"' 会被重复读。
+            format!("'{}'", t.replace('\'', "''"))
+        }
         shape::SortPart::Time(t) => {
             let text = keyset_time_literal(t);
             // Oracle / 达梦：字符串 → 日期时间走**会话 NLS 格式**隐式转换
@@ -2572,8 +2577,9 @@ mod key_validation_tests {
             "timestamp '2024-01-01 10:00:00'"
         );
         assert_eq!(keyset_literal(&time, dm, true), "timestamp '2024-01-01 10:00:00'");
-        // 文本列里存 ISO 时间：保持字符串比较
-        assert_eq!(keyset_literal(&time, ora, false), "'2024-01-01 10:00:00'");
+        // 文本列里存 ISO 时间：按库里的原样值比较（保留 T）。换成空格会让
+        // '2024-01-01T10:00:00' 这样的边界行被重复读进下一页。
+        assert_eq!(keyset_literal(&time, ora, false), "'2024-01-01T10:00:00'");
         // 其它方言两种写法等价，行为不变
         assert_eq!(keyset_literal(&time, my, true), "'2024-01-01 10:00:00'");
         // 文本键照旧转义单引号

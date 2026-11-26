@@ -16,6 +16,8 @@ export default {
   noSql: false,
   schemaLevel: 'none',
   defaultSchema: 'main',
+  // sql-formatter 已内置 duckdb 方言，不声明会静默退回标准 SQL（格式化仍提示成功）
+  formatDialect: 'duckdb',
   quoteStyle: 'DOUBLE_QUOTE',
   // 官方品牌 SVG（assets/duckdb.svg）；内联鸭形只作文件缺失时的兜底
   logo: 'duckdb.svg',

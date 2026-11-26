@@ -24,7 +24,8 @@ defaultPort: 9030
 jdbc:
   driverClass: com.mysql.cj.jdbc.Driver
   urlTemplate: "jdbc:mysql://{host}:{port}/{database}?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&connectTimeout=10000&socketTimeout=600000&rewriteBatchedStatements=true&useCursorFetch=true&zeroDateTimeBehavior=CONVERT_TO_NULL&allowMultiQueries=true"
-  artifact: mysql:mysql-connector-java:8.0.28
+  # 与 Doris/StarRocks 共享 doris 驱动目录，坐标必须一致（否则就绪检查互相打架）
+  artifact: com.mysql:mysql-connector-j:9.1.0
 traits:
   singleDatabase: false
   schemaAware: true
