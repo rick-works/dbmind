@@ -130,12 +130,13 @@ for (const store of [window.localStorage, window.sessionStorage]) {
   } catch (e) { /* 同上 */ }
 }
 
-// 桌面壳在 Windows 老系统（Server 2012 R2 / Win8）上会关掉无边框阴影模拟以去掉
-// 那圈亮蓝色系统边框（见 crates/dbmind-desktop/src/main.rs）。那样窗口就是真正的
-// 无边框，四周连 1px 线都没有；这里给 body 打标记，由全局样式补一条与 Win11
-// 同款的暗色细线。只由壳注入，浏览器版没有这个全局变量，观感不受影响。
-if (window.__DBMIND_LEGACY_FRAME__) {
-  document.body.classList.add('dc-legacy-frame')
+// 桌面壳（非 macOS）统一注入标记，由全局样式给窗口四周画一条 1px 暗色细线。
+// 以前这条线完全依赖 tao「无边框 + 阴影」模拟留下的原生非客户区由 DWM 画出来，
+// 那套副作用一失效窗口就彻底没框了；现在应用自己画，观感与 DBX 一致。
+// Server 2012 仍由壳关掉阴影模拟以去掉亮蓝粗框（见 main.rs），CSS 细线照常补上。
+// 浏览器版没有这个全局变量，观感不受影响。
+if (window.__DBMIND_DESKTOP_FRAME__ || window.__DBMIND_LEGACY_FRAME__) {
+  document.body.classList.add('dc-desktop-frame')
 }
 
 const app = createApp(App)
