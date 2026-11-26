@@ -64,7 +64,7 @@
         "schemaSearch": true,
         "sqlExplain": true,
         "sqlFileExecution": true,
-        "tableDataEdit": false,
+        "tableDataEdit": true,
         "tableImport": true,
         "tableStructureEdit": false,
         "userAdmin": false
@@ -1181,7 +1181,7 @@
         "tableDataEdit": true,
         "tableImport": true,
         "tableStructureEdit": true,
-        "userAdmin": false
+        "userAdmin": true
       },
       "defaultPort": 9092,
       "dialect": "H2",
@@ -1497,10 +1497,10 @@
         "schemaSearch": true,
         "sqlExplain": false,
         "sqlFileExecution": false,
-        "tableDataEdit": true,
+        "tableDataEdit": false,
         "tableImport": true,
         "tableStructureEdit": false,
-        "userAdmin": true
+        "userAdmin": false
       },
       "defaultPort": 27017,
       "dialect": "MongoShell",
@@ -1543,7 +1543,7 @@
         "schemaSearch": false,
         "sqlExplain": false,
         "sqlFileExecution": false,
-        "tableDataEdit": true,
+        "tableDataEdit": false,
         "tableImport": false,
         "tableStructureEdit": false,
         "userAdmin": false

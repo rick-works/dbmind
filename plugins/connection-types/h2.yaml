@@ -37,5 +37,6 @@ capabilities:
   databaseCreate: true
   fieldLineage: false
   sqlExplain: true
-  userAdmin: false
+  # H2 用户管理 SQL 完整实现（含空用户名 ""），实测 H2 2.3.232 通过
+  userAdmin: true
   driverManagement: true

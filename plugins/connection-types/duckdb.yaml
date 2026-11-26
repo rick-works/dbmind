@@ -32,7 +32,8 @@ capabilities:
   objectSource: true
   schemaSearch: true
   diagram: true
-  tableDataEdit: false
+  # DuckDB 支持标准 UPDATE/DELETE，data_save 走方言默认语句即可
+  tableDataEdit: true
   tableStructureEdit: false
   tableImport: true
   dataTransfer: true

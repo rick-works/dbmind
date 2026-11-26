@@ -28,7 +28,8 @@ capabilities:
   objectSource: false
   schemaSearch: false
   diagram: false
-  tableDataEdit: true
+  # NoSQL 视图只读，后端无单文档写入接口，行编辑不可用
+  tableDataEdit: false
   tableStructureEdit: false
   tableImport: false
   dataTransfer: false

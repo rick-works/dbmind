@@ -30,7 +30,8 @@ capabilities:
   objectSource: false
   schemaSearch: true
   diagram: false
-  tableDataEdit: true
+  # NoSQL 视图只读，后端无单文档写入接口，行编辑不可用
+  tableDataEdit: false
   tableStructureEdit: false
   tableImport: true
   dataTransfer: false
@@ -38,5 +39,6 @@ capabilities:
   databaseCreate: true
   fieldLineage: false
   sqlExplain: false
-  userAdmin: true
+  # 后端无 NoSQL users 接口，Redis/ES 同为 false，口径统一
+  userAdmin: false
   driverManagement: true
