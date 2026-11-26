@@ -326,19 +326,28 @@ pub async fn chat_stream(State(state): State<AppState>, Json(req): Json<AiReques
         }
         // 攒一份完整回答：流结束后要把它落进会话，否则「继续上次」只有提问没有回答
         let mut answer = String::new();
+        let mut disconnected = false;
         let outcome = config::chat_stream(&model, &system, &messages, |delta| {
             answer.push_str(delta);
             // 分片整体过一遍 serde_json：换行/控制字符由它负责转义，
             // 手工拼字符串是最容易把 SSE 帧撑破的地方
             let frame = format!("data:{}\n\n", json!({ "d": delta }));
-            let _ = tx.blocking_send(Ok(frame));
+            if tx.blocking_send(Ok(frame)).is_err() {
+                // 客户端已断开：让 config 层立即停读上游，别继续烧 token
+                disconnected = true;
+                return false;
+            }
+            true
         });
         let tail = match outcome {
             // 用量单独发一帧（在 done 之前）：前端按 `data:` 帧解析，收到就挂到这条回答下。
             //上游没给 usage 时**不发这一帧** —— 前端据此显示"未提供"，而不是显示 0。
             Ok(usage) => {
-                if let Some(thread) = &stream_thread {
-                    teammate::append_message(thread, "assistant", &answer, usage.as_ref(), None);
+                // 断线时的半截回答不落库，否则「继续上次」会把中断当成结论
+                if !disconnected {
+                    if let Some(thread) = &stream_thread {
+                        teammate::append_message(thread, "assistant", &answer, usage.as_ref(), None);
+                    }
                 }
                 match usage {
                     Some(usage) => format!(

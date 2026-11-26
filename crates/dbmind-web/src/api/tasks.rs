@@ -180,6 +180,10 @@ pub struct Task {
     /// 前端只靠"数组变长了"判断有没有新行的话，日志区就永远停在那里不动
     /// （导出进度正是这么卡住的）。有了单调序号，前端可以按序号只追加新行。
     logs_seq: AtomicU64,
+    /// 看门狗强制收口时调用的取消钩子：协作式取消（cancel 标志）只能在工作体
+    /// 两次 await 之间被看到，卡在 spawn_blocking 里的 JDBC 调用必须走宿主
+    /// Statement.cancel 才能真正断开。各长任务在发起调用前注册自己的 execution_id。
+    force_cancel: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
     result: Mutex<Option<Value>>,
     artifact: Mutex<Option<Artifact>>,
     /// 任务上下文（库名、表名等「这条任务是干什么的」信息）。
@@ -234,6 +238,7 @@ impl Task {
             message: Mutex::new(String::new()),
             logs: Mutex::new(Vec::new()),
             logs_seq: AtomicU64::new(0),
+            force_cancel: Mutex::new(None),
             result: Mutex::new(None),
             artifact: Mutex::new(None),
             context: Mutex::new(None),
@@ -294,6 +299,7 @@ impl Task {
             message: Mutex::new(text("message")),
             logs: Mutex::new(logs),
             logs_seq: AtomicU64::new(logs_seq),
+            force_cancel: Mutex::new(None),
             result: Mutex::new(snap.get("result").cloned()),
             artifact: Mutex::new(None),
             context: Mutex::new(None),
@@ -560,9 +566,12 @@ impl Task {
     }
 
     pub fn log(&self, line: impl Into<String>) {
+        // 序号在 logs 锁内累加，保证 snapshot 拿到的 (logs, seq) 是同一时刻的原子快照。
+        // 原来序号是独立 AtomicU64：写线程 push 完日志、还没 fetch_add 时被 snapshot
+        // 撞上，前端按 logsSeq 增量渲染就会漏掉最后一行。
         let mut logs = lock(&self.logs);
         logs.push(line.into());
-        self.logs_seq.fetch_add(1, Ordering::Relaxed);
+        self.logs_seq.fetch_add(1, Ordering::Release);
         if logs.len() > MAX_LOGS {
             let overflow = logs.len() - MAX_LOGS;
             logs.drain(0..overflow);
@@ -581,6 +590,18 @@ impl Task {
     /// 日志的**累计行数**（含被 [`MAX_LOGS`] 挤掉的）。前端据此只追加新行，不重复渲染。
     pub fn logs_seq(&self) -> u64 {
         self.logs_seq.load(Ordering::Relaxed)
+    }
+
+    /// 注册强制取消钩子（长任务在发起宿主调用前登记 execution_id）。
+    pub fn set_force_cancel<F: Fn() + Send + Sync + 'static>(&self, f: F) {
+        *lock(&self.force_cancel) = Some(Box::new(f));
+    }
+
+    /// 看门狗强制收口：先让宿主中断正在跑的 JDBC 调用，再 abort 外层协程。
+    pub fn force_cancel(&self) {
+        if let Some(f) = lock(&self.force_cancel).take() {
+            f();
+        }
     }
 
     pub fn set_message(&self, message: impl Into<String>) {
@@ -635,6 +656,12 @@ impl Task {
         // 已经发出去但被回滚的那部分也会算进去（真机：传输 3245 万 > 读取 3170 万）。
         // 这里按读取数夹一刀，界面上的两个数字就始终自洽。
         let written = (*lock(&self.rows_written)).min(read);
+        // 先拿 logs 锁再读 seq（与 log() 的写序一致）：这对值必须是同一时刻的快照，
+        // 否则前端按 logsSeq 增量渲染会漏行/串行。
+        let (logs_snapshot, logs_seq) = {
+            let logs = lock(&self.logs);
+            (logs.clone(), self.logs_seq.load(Ordering::Acquire))
+        };
         json!({
             "taskId": self.id,
             "status": self.status().as_str(),
@@ -651,9 +678,8 @@ impl Task {
             "phase": lock(&self.phase).clone(),
             "message": lock(&self.message).clone(),
             "canceled": self.is_canceled(),
-            "logs": lock(&self.logs).clone(),
-            // 单调序号：前端据此判断"有没有新行"，不受 MAX_LOGS 裁剪影响
-            "logsSeq": self.logs_seq.load(Ordering::Relaxed),
+            "logs": logs_snapshot,
+            "logsSeq": logs_seq,
             // 任务**已运行时长**（毫秒）：终态后取冻结值（不再跟时钟走）；
             // 前端从任务中心/悬浮恢复进度窗时，耗时卡用它续算（开始墙钟 = now - elapsedMs）
             "elapsedMs": lock(&self.finished_elapsed)
@@ -818,6 +844,8 @@ impl TaskRegistry {
                         watch.set_status(TaskStatus::Canceled);
                         watch.set_message("已强制结束，已写入的部分保留、不回滚");
                         persist_task(&watch);
+                        // abort 停不掉 spawn_blocking 里的 JDBC 调用：先触发宿主 Statement.cancel
+                        watch.force_cancel();
                         handle.abort();
                         return;
                     }
@@ -839,10 +867,14 @@ impl TaskRegistry {
                          请把本行日志反馈给开发；已强制结束，已写入的部分保留、不回滚"
                     ));
                     watch.set_status(TaskStatus::Error);
+                    // 不要断言「连接可能已断开」：建索引、count(*) 校验、等并发槽位
+                    // 都可能长时间不动计数，任务其实活着。真实原因只进 tracing。
                     watch.set_message(format!(
-                        "任务长时间无进展（{minutes} 分钟），已强制结束：连接可能已断开"
+                        "任务长时间无计数进展（{minutes} 分钟），已强制结束（阶段：{}）",
+                        lock(&watch.phase)
                     ));
                     persist_task(&watch);
+                    watch.force_cancel();
                     handle.abort();
                     return;
                 }

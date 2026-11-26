@@ -831,12 +831,14 @@ fn parse_usage_str(payload: &str) -> Option<TokenUsage> {
 
 /// <p>智能体要「深度思考过程可见」就靠它：模型的每一段话边说边到界面，
 /// 工具调用照样能在循环里拿到完整参数。
+/// on_delta 返回 false 表示客户端已断开、要求中止：回调里检测 SSE 发送失败后返回
+/// false，本函数立即停止读上游，避免"用户早就关了页面，后端还在烧 token 读完整段"。
 pub fn chat_tools_stream(
     model: &ModelEntry,
     system: &str,
     messages: &[Value],
     tools: &Value,
-    mut on_delta: impl FnMut(&str),
+    mut on_delta: impl FnMut(&str) -> bool,
 ) -> XResult<Value> {
     let url = endpoint(&model.base_url, "/chat/completions");
     let mut all: Vec<Value> = Vec::new();
@@ -867,7 +869,7 @@ pub fn chat_tools_stream(
         if line.is_empty() {
             if let Some(payload) = take_sse_frame(&mut sse_data) {
                 if payload == "[DONE]" { break }
-                handle_sse_payload(&payload, &mut content, &mut usage, &mut calls, &mut on_delta)?;
+                if !handle_sse_payload(&payload, &mut content, &mut usage, &mut calls, &mut on_delta)? { break }
             }
             continue;
         }
@@ -879,7 +881,7 @@ pub fn chat_tools_stream(
     // 流结束可能没有末尾空行，把残留的一帧也处理掉
     if let Some(payload) = take_sse_frame(&mut sse_data) {
         if payload != "[DONE]" {
-            handle_sse_payload(&payload, &mut content, &mut usage, &mut calls, &mut on_delta)?;
+            let _ = handle_sse_payload(&payload, &mut content, &mut usage, &mut calls, &mut on_delta)?;
         }
     }
 
@@ -888,14 +890,14 @@ pub fn chat_tools_stream(
         content: &mut String,
         usage: &mut Option<TokenUsage>,
         calls: &mut Vec<(String, String, String)>,
-        on_delta: &mut impl FnMut(&str),
-    ) -> XResult<()> {
+        on_delta: &mut impl FnMut(&str) -> bool,
+    ) -> XResult<bool> {
         let value: Value = match serde_json::from_str(payload) {
             Ok(value) => value,
             Err(e) => {
                 // 解析失败不能静默吞：记下原文，方便排查网关返回的怪帧
                 tracing::warn!("模型流里有一帧不是合法 JSON，已跳过：{e}；原文={}", &payload[..payload.len().min(500)]);
-                return Ok(());
+                return Ok(true);
             }
         };
         if let Some(seen) = parse_usage(&value) {
@@ -907,12 +909,12 @@ pub fn chat_tools_stream(
             .and_then(|choices| choices.first())
             .and_then(|choice| choice.get("delta"))
         else {
-            return Ok(());
+            return Ok(true);
         };
         if let Some(text) = delta.get("content").and_then(Value::as_str) {
             if !text.is_empty() {
                 content.push_str(text);
-                on_delta(text);
+                if !on_delta(text) { return Ok(false) }
             }
         }
         if let Some(items) = delta.get("tool_calls").and_then(Value::as_array) {
@@ -948,7 +950,7 @@ pub fn chat_tools_stream(
                 }
             }
         }
-        Ok(())
+        Ok(true)
     }
     if content.trim().is_empty() && calls.iter().all(|(_, name, _)| name.is_empty()) {
         return Err(XError::internal("模型既没有内容也没有工具调用（流式响应为空）"));
@@ -979,11 +981,12 @@ pub fn chat_tools_stream(
 }
 
 /// 流式对话：每收到一个增量就回调一次（**阻塞**，调用方负责放到 blocking 线程里）。
+/// on_delta 返回 false 表示客户端断开，立即停止读上游（不再白烧 token）。
 pub fn chat_stream(
     model: &ModelEntry,
     system: &str,
     messages: &[Msg],
-    mut on_delta: impl FnMut(&str),
+    mut on_delta: impl FnMut(&str) -> bool,
 ) -> XResult<Option<TokenUsage>> {
     let url = endpoint(&model.base_url, "/chat/completions");
     let mut body = request_body(model, messages_json(system, messages), true);
@@ -999,13 +1002,17 @@ pub fn chat_stream(
     // 与 chat_tools_stream 同口径：按空行分帧、同帧多行 data 拼接，
     // 别把 SSE 折行产生的半截 JSON 静默丢掉（token 计数也会跟着偏少）。
     let mut sse_data: Vec<String> = Vec::new();
+    let mut cancelled = false;
     for line in reader.lines() {
         let line = line.map_err(|e| XError::internal(format!("读取模型流失败：{e}")))?;
         let line = line.trim_end_matches(['\r', '\n']);
         if line.is_empty() {
             if let Some(payload) = take_sse_frame(&mut sse_data) {
                 if payload == "[DONE]" { break }
-                if let Some(text) = chat_frame_text(&payload) { produced = true; on_delta(&text) }
+                if let Some(text) = chat_frame_text(&payload) {
+                    produced = true;
+                    if !on_delta(&text) { cancelled = true; break }
+                }
                 if let Some(seen) = parse_usage_str(&payload) { usage = Some(seen) }
             }
             continue;
@@ -1016,9 +1023,17 @@ pub fn chat_stream(
     }
     if let Some(payload) = take_sse_frame(&mut sse_data) {
         if payload != "[DONE]" {
-            if let Some(text) = chat_frame_text(&payload) { produced = true; on_delta(&text) }
+            if let Some(text) = chat_frame_text(&payload) {
+                produced = true;
+                if !on_delta(&text) { cancelled = true }
+            }
             if let Some(seen) = parse_usage_str(&payload) { usage = Some(seen) }
         }
+    }
+    if cancelled {
+        // 客户端已断开：不再 record_usage（那半截回答用户没看到，不计入用量明细也无所谓）；
+        // 返回 Ok(usage) 让调用方按正常收尾，但调用方应通过自己回调里的断开标志跳过落库。
+        return Ok(usage);
     }
     if !produced {
         return Err(XError::internal("模型没有返回任何内容（流式响应为空）"));

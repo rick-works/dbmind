@@ -1221,6 +1221,8 @@ async fn run_task(state: &AppState, task: &AiTaskRow) -> XResult<Value> {
         id: String::new(),
         title: task.title.clone(),
         goal: task.prompt.clone(),
+        // 定时任务没有发起会话
+        thread_id: String::new(),
         connection_id: task.connection_id.clone(),
         database_name: task.database_name.clone(),
         kind: "patrol".to_string(),

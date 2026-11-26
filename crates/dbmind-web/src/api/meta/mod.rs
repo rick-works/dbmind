@@ -102,7 +102,7 @@ pub async fn run_sql_in(
     sql: String,
     max_rows: usize,
 ) -> XResult<QueryResult> {
-    run_sql_in_inner(state, conn, database, sql, max_rows, None, false).await
+    run_sql_in_inner(state, conn, database, sql, max_rows, None, false, None).await
 }
 
 /// 同 [`run_sql_in`]，但显式要求**可写会话**。
@@ -128,6 +128,7 @@ pub(crate) async fn run_sql_in_write(
         max_rows,
         Some(crate::api::sync::SESSION_SYNC_DDL),
         true,
+        None,
     )
     .await
 }
@@ -140,6 +141,7 @@ async fn run_sql_in_inner(
     max_rows: usize,
     session: Option<&str>,
     write: bool,
+    exec_id: Option<String>,
 ) -> XResult<QueryResult> {
     let target = crate::api::scope::resolve(state, conn, database).await?;
     // 元数据也是「连上去查」：驱动没装就先下（离线时只失败一次，原因会被缓存）
@@ -174,7 +176,7 @@ async fn run_sql_in_inner(
             max_rows,
             timeout_ms: 120_000,
         },
-        execution_id: None,
+        execution_id: exec_id,
         // 刻意**不**给会话亲和键（`session: None`），让它复用元数据那条会话；
         // 唯一的例外是 [`run_sql_in_background`]（行数回填）带独立键 `internal:rowcount` ——
         // 回填几十条 COUNT 不能和用户的元数据请求挤同一条连接（见该函数注释）。
@@ -214,6 +216,30 @@ async fn run_sql_in_inner(
 /// 撞上元数据 30 秒超时（真机回归：v1.2.28 修了预热与 ClickHouse 建连后仍复现）。
 /// 独立亲和键 ⇒ 独立物理会话 ⇒ 回填再忙也不堵用户的元数据请求。
 /// 代价是每个库多一条连接（一条给回填、一条给元数据），换来互不阻塞。
+/// 同 [`run_sql_in_background`]，但带 execution_id：长任务用它把在途 SQL 登记到
+/// 内核取消表，看门狗/用户停止时可以走宿主 Statement.cancel 中断卡住的 JDBC 调用
+/// （仅 abort 外层协程停不掉 spawn_blocking 里的阻塞调用）。
+pub(crate) async fn run_sql_in_task(
+    state: &AppState,
+    conn: &str,
+    database: &str,
+    sql: String,
+    max_rows: usize,
+    exec_id: String,
+) -> XResult<QueryResult> {
+    run_sql_in_inner(
+        state,
+        conn,
+        database,
+        sql,
+        max_rows,
+        Some("internal:rowcount"),
+        false,
+        Some(exec_id),
+    )
+    .await
+}
+
 pub(crate) async fn run_sql_in_background(
     state: &AppState,
     conn: &str,
@@ -229,6 +255,7 @@ pub(crate) async fn run_sql_in_background(
         max_rows,
         Some("internal:rowcount"),
         false,
+        None,
     )
     .await
 }
@@ -245,7 +272,7 @@ pub(crate) async fn run_sql_in_keyed(
     max_rows: usize,
     session: &str,
 ) -> XResult<QueryResult> {
-    run_sql_in_inner(state, conn, database, sql, max_rows, Some(session), false).await
+    run_sql_in_inner(state, conn, database, sql, max_rows, Some(session), false, None).await
 }
 
 /// 同 [`run_sql_in`]，但**跟随连接的读写策略**（`read_only: None`）——

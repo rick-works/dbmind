@@ -635,6 +635,10 @@ impl Store {
         if !has_col("ai_messages", "meta")? {
             conn.execute_batch("ALTER TABLE ai_messages ADD COLUMN meta TEXT NOT NULL DEFAULT '';")?;
         }
+        // ai_jobs 加 thread_id：审批续跑的结论要回写原会话
+        if !has_col("ai_jobs", "thread_id")? {
+            conn.execute_batch("ALTER TABLE ai_jobs ADD COLUMN thread_id TEXT NOT NULL DEFAULT '';")?;
+        }
         // ai_changes 加 connection_name：变更记录要能显示连接名，而连接可能早被删掉了
         // （表只存 id）。老库补空串，读取侧再从 query_history 里找回过一次。
         if !has_col("ai_changes", "connection_name")? {
@@ -2192,6 +2196,8 @@ pub struct AiJobRow {
     pub id: String,
     pub title: String,
     pub goal: String,
+    /// 发起这张 job 的 AI 会话 id（审批续跑后结论回到这条会话）
+    pub thread_id: String,
     pub connection_id: String,
     pub database_name: String,
     /// chat / patrol / change / manual
@@ -2709,12 +2715,13 @@ impl Store {
         let now = now_iso();
         let conn = self.lock();
         conn.execute(
-            "INSERT INTO ai_jobs (id, title, goal, connection_id, database_name, kind, status, steps, \
-                 result, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
+            "INSERT INTO ai_jobs (id, title, goal, thread_id, connection_id, database_name, kind, status, steps, \
+                 result, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
             params![
                 id,
                 row.title,
                 row.goal,
+                row.thread_id,
                 row.connection_id,
                 row.database_name,
                 if row.kind.is_empty() { "chat" } else { &row.kind },
@@ -2725,6 +2732,13 @@ impl Store {
             ],
         )?;
         Ok(id)
+    }
+
+    /// job 在会话 begin_turn 之前就建好了，thread_id 只能事后回填。
+    pub fn ai_job_set_thread(&self, id: &str, thread_id: &str) -> Result<()> {
+        let conn = self.lock();
+        conn.execute("UPDATE ai_jobs SET thread_id = ?2 WHERE id = ?1", params![id, thread_id])?;
+        Ok(())
     }
 
     pub fn ai_job_update(&self, id: &str, status: &str, steps: &str, result: &str) -> Result<()> {
@@ -2739,7 +2753,7 @@ impl Store {
     pub fn ai_job_list(&self, limit: usize) -> Result<Vec<AiJobRow>> {
         let conn = self.lock();
         let mut stmt = conn.prepare(
-            "SELECT id, title, goal, connection_id, database_name, kind, status, steps, result, \
+            "SELECT id, title, goal, thread_id, connection_id, database_name, kind, status, steps, result, \
                  created_at, updated_at FROM ai_jobs ORDER BY created_at DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit as i64], |row| {
@@ -2747,14 +2761,15 @@ impl Store {
                 id: row.get(0)?,
                 title: row.get(1)?,
                 goal: row.get(2)?,
-                connection_id: row.get(3)?,
-                database_name: row.get(4)?,
-                kind: row.get(5)?,
-                status: row.get(6)?,
-                steps: row.get(7)?,
-                result: row.get(8)?,
-                created_at: row.get(9)?,
-                updated_at: row.get(10)?,
+                thread_id: row.get(3)?,
+                connection_id: row.get(4)?,
+                database_name: row.get(5)?,
+                kind: row.get(6)?,
+                status: row.get(7)?,
+                steps: row.get(8)?,
+                result: row.get(9)?,
+                created_at: row.get(10)?,
+                updated_at: row.get(11)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -3203,6 +3218,7 @@ CREATE TABLE IF NOT EXISTS ai_jobs (
     id            TEXT PRIMARY KEY,
     title         TEXT NOT NULL DEFAULT '',
     goal          TEXT NOT NULL DEFAULT '',
+    thread_id     TEXT NOT NULL DEFAULT '',
     connection_id TEXT NOT NULL DEFAULT '',
     database_name TEXT NOT NULL DEFAULT '',
     kind          TEXT NOT NULL DEFAULT 'chat',

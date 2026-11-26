@@ -47,7 +47,7 @@ use zip::{CompressionMethod, ZipWriter};
 
 use crate::api::dialect::{Dialect, Meta};
 use crate::api::error::{XError, XResult};
-use crate::api::meta::{rows_of, run_sql_in, run_sql_in_background};
+use crate::api::meta::{rows_of, run_sql_in, run_sql_in_background, run_sql_in_task};
 use crate::api::shape;
 use crate::api::tasks::{self, Artifact, Task};
 use crate::api::xlsx::{SheetSpec, Workbook};
@@ -1334,6 +1334,14 @@ async fn export_query(
 
     let base = base_sql(req, dialect)?;
     let page_size = req.size.unwrap_or(PAGE_ROWS).max(1);
+    // 长任务把在途 SQL 登记到内核取消表：看门狗强制收口时先中断宿主 JDBC 调用，
+    // 否则 tokio abort 停不掉 spawn_blocking，连接/事务会继续占着（并发上限超时）。
+    let exec_id = dbmind_core::DbMindEngine::next_execution_id();
+    if let Some(task) = task {
+        let engine = state.engine();
+        let eid = exec_id.clone();
+        task.set_force_cancel(move || { engine.cancel(&eid); });
+    }
     let start_offset = req
         .page
         .map(|page| page.saturating_sub(1))
@@ -1419,7 +1427,9 @@ async fn export_query(
         let t_fetch = std::time::Instant::now();
         // 导出是**长任务**（一页一页拉到完）：走独立会话键，不占元数据那条连接 ——
         // 否则导出大表期间「编辑表结构 / 树展开」的取列请求全部排在后面（30 秒超时）。
-        let mut result = run_sql_in_background(state, id, &req.database, sql, page_size as usize).await?;
+        let mut result = run_sql_in_task(
+            state, id, &req.database, sql, page_size as usize, exec_id.clone()
+        ).await?;
         if profile {
             fetch_ms += t_fetch.elapsed().as_secs_f64() * 1000.0;
         }

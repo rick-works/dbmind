@@ -638,10 +638,10 @@ async fn run_loop(
                     &messages_call,
                     &tool_defs(),
                     |delta| {
-                        let _ = frames.send(Ok(format!(
+                        frames.send(Ok(format!(
                             "data:{}\n\n",
                             json!({ "t": "delta", "d": delta })
-                        )));
+                        ))).is_ok()
                     },
                 )
             }
@@ -776,10 +776,10 @@ async fn run_loop(
                     &forced,
                     &json!([]),
                     |delta| {
-                        let _ = frames.send(Ok(format!(
+                        frames.send(Ok(format!(
                             "data:{}\n\n",
                             json!({ "t": "delta", "d": delta })
-                        )));
+                        ))).is_ok()
                     },
                 )
             }
@@ -1057,6 +1057,7 @@ async fn run_core(
             id: String::new(),
             title: question.chars().take(30).collect(),
             goal: question.clone(),
+            thread_id: String::new(),
             connection_id: conn.clone(),
             database_name: database.clone(),
             kind: "agent".to_string(),
@@ -1082,6 +1083,9 @@ async fn run_core(
     )
     .unwrap_or_default();
     if !thread_id.is_empty() {
+        if let Some(store) = dbmind_core::global_store() {
+            let _ = store.ai_job_set_thread(&job_id, &thread_id);
+        }
         crate::api::ai::teammate::append_message(&thread_id, "user", &question, None, None);
     }
     // 历史对话：6 条 / 4000 字符封顶（比普通对话的 6000 更紧 —— 智能体自己还要装
@@ -1323,14 +1327,13 @@ async fn resume_core(
 
     checkpoint_job(&id, "running", &steps, &job.result);
     let mut changes: Vec<Value> = Vec::new();
-    // `ai_jobs` 没有 thread_id 列（表是早先定的）：续跑出的变更单只挂 job、
-    // 不挂会话。要挂会话得先给表加列并迁移，不值得为一个归属字段动表。
+    // 首跑已回填 job.thread_id：续跑结论与变更单回到同一条会话
     let outcome = run_loop(
         &state,
         &job.connection_id,
         &job.database_name,
         protocol,
-        "",
+        &job.thread_id,
         &model,
         &system,
         &mut messages,
@@ -1346,12 +1349,12 @@ async fn resume_core(
     if outcome.stopped == "maxRounds" && answer.trim().is_empty() {
         answer = unfinished_note(&steps, max_rounds);
     }
-    // 与首跑同一条兜底：回答里的写 SQL 也要变成变更单（续跑没有会话归属，传空 thread_id）
+    // 与首跑同一条兜底，挂在原会话上
     harvest_changes(
         &state,
         &job.connection_id,
         &job.database_name,
-        "",
+        &job.thread_id,
         protocol,
         &answer,
         &mut changes,
@@ -1378,6 +1381,23 @@ async fn resume_core(
         "waiting"
     };
     checkpoint_job(&id, status, &steps, &answer);
+
+    // 续跑结论回写原会话：否则刷新后会话里只有首跑那一半
+    if !job.thread_id.is_empty() {
+        let meta = json!({
+            "steps": &steps,
+            "changes": &changes,
+            "jobId": &id,
+            "resumed": true,
+        });
+        crate::api::ai::teammate::append_message(
+            &job.thread_id,
+            "assistant",
+            &answer,
+            outcome.usage.as_ref(),
+            Some(&meta),
+        );
+    }
 
     Ok(json!({
         "success": true,
