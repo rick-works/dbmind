@@ -197,7 +197,15 @@ const panels = computed(() => {
       const sparse = p.mode !== 'kv' && cs.length > 0 && cs.length <= 6 && !cs.some(c => isQueryCol(c))
       // 少列表格的列宽在这里一次算好（见 colPlan），模板直接取用
       const widths = sparse ? colPlan(cs, rs) : null
-      return { ...p, rows: rs, cols: cs, sparse, widths, error: data.value?.sectionErrors?.[p.key] || '' }
+      // 后端 spec 发的是 killable / copyCols（见 monitor.rs），模板读的是 kill / copy ——
+      // 字段名对不上时两个按钮的条件恒为假，会话表就没了「终止 / 复制」（用户实测）。
+      return {
+        ...p,
+        kill: !!p.killable,
+        copy: !!(p.copyCols && p.copyCols.length),
+        rows: rs, cols: cs, sparse, widths,
+        error: data.value?.sectionErrors?.[p.key] || ''
+      }
     })
     .filter(p => sec(p.key) || p.error)
 })
@@ -292,8 +300,25 @@ const kill = async (row, sessionId) => {
 }
 
 const copyText = async (text) => {
-  try { await navigator.clipboard.writeText(String(text)); ElMessage.success(t('sqlq.copied')) }
-  catch { ElMessage.error(t('sqlq.copyFailed')) }
+  const value = String(text ?? '')
+  // 桌面壳里页面是 http://127.0.0.1（安全上下文），但浏览器版走 http 时
+  // navigator.clipboard 不存在 —— 用 textarea + execCommand 兜底，别让复制悄悄失败。
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value)
+    } else {
+      const ta = document.createElement('textarea')
+      ta.value = value
+      ta.style.position = 'fixed'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.select()
+      const ok = document.execCommand('copy')
+      ta.remove()
+      if (!ok) throw new Error('execCommand copy failed')
+    }
+    ElMessage.success(t('sqlq.copied'))
+  } catch { ElMessage.error(t('sqlq.copyFailed')) }
 }
 
 /** 行锁累计耗时（秒）：按天/小时友好展示 */

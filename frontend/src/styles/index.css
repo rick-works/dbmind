@@ -1328,10 +1328,11 @@ html .el-button.is-text.dc-del.is-disabled { color: var(--dc-text-dim); opacity:
   background: color-mix(in srgb, var(--dc-text) 11%, transparent);
 }
 .ai-model-dropdown .el-dropdown-menu__item.active .skills-ic { background: var(--dc-primary-wash); color: var(--dc-primary); }
-/* 插件技能自带 emoji 图标：占位与 el-icon 一致，但保留 emoji 自身颜色（不跟随主色） */
+/* 插件技能自带 emoji 图标：同一套 20px 圆底方块（与内置项一致），
+   只保留 emoji 自身颜色不跟随主色 —— 去掉原来的 background:transparent，
+   否则下拉里第一项有圆底、后面插件项是裸 emoji，看起来像没对齐（用户反馈）。 */
 .ai-model-dropdown span.skills-ic.skill-emoji {
   width: 20px; height: 20px; font-size: 12px; line-height: 1;
-  background: transparent;
 }
 .ai-model-dropdown .skills-name {
   flex: 1; min-width: 0;

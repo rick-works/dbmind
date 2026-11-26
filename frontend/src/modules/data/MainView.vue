@@ -10324,6 +10324,16 @@ const connTypeSummary = computed(() =>
 .el-dropdown-menu__item.is-current .el-icon,
 .el-dropdown-menu__item.is-current .nav-ic { color: var(--dc-primary); }
 
+/* 「更多」下拉四项的图标对齐：任务中心用自绘 nav-ic（display:block 的 mask <i>），
+   其余三项是 Element 线性 SVG（el-icon 的 font-size 体系）。两者盒模型不同 ——
+   nav-ic 默认吃 --dc-nav-icon(16px)，比旁边的 14px 线性图标大一号、基线也不齐。
+   这里把下拉里的 nav-ic 按 1em 走、与 el-icon 同盒模型，四项尺寸与垂直位置就一致了。 */
+.el-dropdown-menu__item .more-item-icon { display: inline-flex; align-items: center; justify-content: center; }
+.el-dropdown-menu__item .more-item-icon .nav-ic {
+  display: block; width: 1em; height: 1em; font-size: inherit;
+  vertical-align: middle;
+}
+
 /* 在线更新流程里的消息框，两个共用（customClass: upd-box）：
    更新前的确认框，以及更新成功后的提示框。
    **必须放在全局块**：消息框是 Element 用 JS 创建再 teleport 到 body 的 —— 它不带本组件的

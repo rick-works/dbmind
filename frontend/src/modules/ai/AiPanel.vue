@@ -423,7 +423,8 @@
                            @command="pickSkill" @visible-change="onSkillVisible">
                 <button class="skill-btn" :class="{ open: skillsOpen }" type="button"
                         v-fast-tip.always="() => $t('ai.pickSkill')">
-                  <el-icon class="skill-btn-ic"><MagicStick /></el-icon>
+                  <!-- 与 AI 面板品牌/「问数」等入口统一用自绘 AiMark，别混用 MagicStick（那是插件中心的图标） -->
+                  <span class="skill-btn-ic"><AiMark /></span>
                   <span class="skill-btn-tx">{{ $t('ai.skills') }}</span>
                   <el-icon class="skill-btn-caret"><ArrowDown /></el-icon>
                 </button>
@@ -3870,7 +3871,7 @@ watch([currentModelLabel, kbScopeLabel, () => ctxTables.value.length, () => loca
 }
 .skill-btn:hover { border-color: var(--dc-primary); color: var(--dc-primary); }
 .skill-btn.open { border-color: var(--dc-primary); color: var(--dc-primary); background: var(--dc-primary-wash); }
-.skill-btn-ic { color: var(--dc-primary); }
+.skill-btn-ic { color: var(--dc-primary); display: inline-flex; align-items: center; font-size: 14px; }
 .skill-btn-tx { font-weight: 400; }
 .skill-btn-caret { font-size: 13px; color: var(--dc-text-weak); transition: transform .18s ease; }
 .skill-btn.open .skill-btn-caret { transform: rotate(180deg); }
