@@ -938,19 +938,33 @@ const doReindex = async () => {
 
 // ---------- 文档 ----------
 
+let chunksSeq = 0
 const toggleChunks = async (doc) => {
-  if (chunkDocId.value === doc.id) { chunkDocId.value = ''; chunkData.value = null; return }
+  if (chunkDocId.value === doc.id) {
+    chunkDocId.value = ''
+    chunkData.value = null
+    chunksSeq++
+    chunksLoading.value = false
+    return
+  }
+  const seq = ++chunksSeq
+  const wantKb = activeId.value
   chunkDocId.value = doc.id
   chunkData.value = null
   chunkLimit.value = 10
   chunksLoading.value = true
   try {
-    const d = await kbDocChunks({ kbId: activeId.value, docId: doc.id })
+    const d = await kbDocChunks({ kbId: wantKb, docId: doc.id })
+    // 快速点 A、B：先返回的 A 不能覆盖当前展开的 B（同源的 loadDocs 早有 wantKb 校验）
+    if (seq !== chunksSeq || wantKb !== activeId.value) return
     if (d?.success === false) throw new Error(d.message || t('ks.loadFailed'))
     chunkData.value = d
     previewText.value = d.chunks?.[0]?.text || previewText.value
-  } catch (e) { ElMessage.error(e?.message || t('ks.loadChunksFailed')) }
-  chunksLoading.value = false
+  } catch (e) {
+    if (seq === chunksSeq) ElMessage.error(e?.message || t('ks.loadChunksFailed'))
+  } finally {
+    if (seq === chunksSeq) chunksLoading.value = false
+  }
 }
 
 const removeDoc = async (doc) => {

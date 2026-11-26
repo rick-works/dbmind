@@ -136,7 +136,7 @@ export function isRawSqlValue (v) {
   const s = String(v == null ? '' : v).trim()
   if (!s) return false
   if (/^null$/i.test(s)) return true
-  if (/^-?\d+(\.\d+)?$/.test(s)) return true
+  if (/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(s)) return true
   if (TPL_RAW_KEYWORDS.test(s)) return true
   // 函数形状：NOW()、length(x)、COALESCE(a, b) —— 括号必须配平到结尾
   return /^[A-Za-z_][\w$]*\s*\(.*\)$/.test(s)

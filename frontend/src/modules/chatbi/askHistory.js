@@ -84,7 +84,15 @@ export const ensureAskHistoryStore = async () => {
     if (raw) {
       const list = JSON.parse(raw)
       if (Array.isArray(list) && list.length) {
-        // 库里有 → 以库为准（它是跨端口的唯一真相；本地可能是另一个端口的陈旧缓存）
+        // 库里有 → 通常以库为准（跨端口的唯一真相）。但镜像有 800ms 防抖：
+        // 刚问完就切走再切回时，本地已立即写入新记录、库里还是旧的；
+        // 此时无脑以库覆盖会把这一轮弄丢。比较两边最新 ts，只让更新的那方胜出。
+        const local = read()
+        const newestTs = (arr) => arr.reduce((m, h) => Math.max(m, Number(h?.ts) || 0), 0)
+        if (newestTs(local) > newestTs(list)) {
+          scheduleMirror(local)
+          return
+        }
         localStorage.setItem(KEY, JSON.stringify(list.slice(0, LIMIT)))
         return
       }

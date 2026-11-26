@@ -63,10 +63,17 @@ fn now() -> String {
     Local::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
-/// 本地 id（`thr_20261031T101502123`）。会话只需要"同一台机器上唯一"，
-/// 用时间戳+毫秒足够，不必引入 uuid 依赖。
+/// 本地 id（`thr_20261031T101502123_a1b2`）。毫秒精度在同一毫秒内两次新建
+/// （双击发送 / 两个标签页同时提问）会碰撞：`ai_thread_save` 的 ON CONFLICT DO UPDATE
+/// 把两条会话合并成一条，问答串台。末尾加进程内原子序号兜底。
 fn new_id(prefix: &str) -> String {
-    format!("{prefix}_{}", Local::now().format("%Y%m%dT%H%M%S%3f"))
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!(
+        "{prefix}_{}_{:04x}",
+        Local::now().format("%Y%m%dT%H%M%S%3f"),
+        n & 0xffff
+    )
 }
 
 /// 下次该跑的时间（`every_minutes` 之后）。时间串统一由这里和 `now_iso` 生成，

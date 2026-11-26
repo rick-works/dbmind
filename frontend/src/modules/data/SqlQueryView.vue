@@ -826,6 +826,8 @@ const DEFAULT_EDITOR_RATIO = 0.5
 const execId = ref('')
 const cancelRequested = ref(false)
 let cancelController = null
+// 查询代次：切连接 / 新一轮执行都递增，过期响应必须丢弃（见 runSql）
+let queryGeneration = 0
 
 // 编辑器 / 查询设置（提前读取，避免在 setup 中访问时出现 TDZ）。
 // editorSettings 用**共享响应式快照**：设置页保存后即时生效（wrapper 会 updateOptions），
@@ -2226,12 +2228,12 @@ const discardEdits = () => {
   pendingEdits.value = []
   resEditing.value = null
 }
-// 一行的 WHERE：有 id 列就按 id；否则用「本次没改动的列」原值拼 AND（NULL → IS NULL），
-// 保证只命中这一行（改过的列不能进 WHERE，否则用新值去匹配旧数据）
+// 一行的 WHERE：用「本次没改动的列」原值拼 AND（NULL → IS NULL），保证只命中这一行
+// （改过的列不能进 WHERE，否则用新值去匹配旧数据）。
+// 以前优先拿名为 id 的列当主键，但 JOIN / 子查询里 id 可能是别名的、或不唯一，
+// 生成 UPDATE ... WHERE id=? 会误更新多行 —— 结果集没有列元数据，不能猜主键。
 const resWhereOf = (g) => {
   const keys = Object.keys(g.original || {})
-  const idKey = keys.find(k => k.toLowerCase() === 'id')
-  if (idKey) return `${resIdent(idKey)} = ${resSqlVal(g.original[idKey])}`
   const pick = (list) => list
     .map(k => g.original[k] == null ? `${resIdent(k)} IS NULL` : `${resIdent(k)} = ${resSqlVal(g.original[k])}`)
     .join('\n  AND ')
@@ -2466,13 +2468,18 @@ const resCtxSelection = () => {
   const row = rowIdx >= 0 ? allRows[rowIdx] : null
   return row ? { rows: [row], cols: col ? [col] : visCols.map(c => c.name) } : { rows: [], cols: [] }
 }
+const BACKSLASH_DIALECTS = new Set(['mysql', 'mariadb', 'clickhouse', 'doris'])
 const resSqlVal = (v) => {
   if (v === null || v === undefined) return 'NULL'
   if (typeof v === 'number') return String(v)
-  if (typeof v === 'boolean') return v ? '1' : '0'
+  // boolean 不能一律 1/0：PG / Kingbase / Oracle 的 boolean 列会报类型不匹配
+  if (typeof v === 'boolean') {
+    return ['postgresql', 'postgres', 'pg', 'kingbase', 'opengauss'].includes(fmtDialect.value)
+      ? (v ? 'TRUE' : 'FALSE') : (v ? '1' : '0')
+  }
   let text = String(v)
-  // MySQL / ClickHouse 默认把反斜杠当转义符；只翻倍单引号会把值悄悄改掉。
-  if (['mysql', 'mariadb', 'clickhouse'].includes(fmtDialect.value)) {
+  // MySQL / ClickHouse / Doris 默认把反斜杠当转义符；只翻倍单引号会把值悄悄改掉。
+  if (BACKSLASH_DIALECTS.has(fmtDialect.value)) {
     text = text.replace(/\\/g, '\\\\')
   }
   return `'${text.replace(/'/g, "''")}'`
@@ -3052,6 +3059,12 @@ watch(selectedConnId, (nv, ov) => {
     txDirty.value = false
     ElMessage.info(t('sqlq.txReset'))
   }
+  // 旧连接上的在途查询必须作废：否则它的响应回来会写进新连接的界面
+  queryGeneration++
+  if (cancelController) cancelController.abort()
+  cancelRequested.value = true
+  running.value = false
+  loading.value = false
   discardEdits()
 })
 const databases = ref([])
@@ -5196,6 +5209,9 @@ const runSql = async (page = 1, size = pageSize.value, batchable = true, overrid
   }
   // 危险 SQL 的二次确认原来在这里单弹一次（DELETE/DROP/TRUNCATE）；已并入上面的
   // 「写操作确认」—— 同一个开关下弹两个框没有意义，用户点两次"继续"才执行。
+  // 代次令牌：切连接 / 下一次执行都会让本轮失效，过期响应一律丢弃。
+  // 以前 cancelRequested 是全局布尔、下一轮会重置 false，A 连接的慢响应会写进 B 的界面。
+  const myGen = ++queryGeneration
   running.value = true
   loading.value = true
   resultVisible.value = true
@@ -5219,6 +5235,7 @@ const runSql = async (page = 1, size = pageSize.value, batchable = true, overrid
     const connId = selectedConnId.value || props.conn?.id
     if (isNoSql.value) {
       const res = await executeNoSql(connId, selectedDatabase.value || undefined, execSql)
+      if (myGen !== queryGeneration) return
       if (cancelRequested.value) { setResultCancelled(); return }
       showSingleResult(res)
     } else {
@@ -5238,6 +5255,7 @@ const runSql = async (page = 1, size = pageSize.value, batchable = true, overrid
       if (statements.length > 1) {
         // size 传分页大小：每段只取一页（见 executeSqlBatch 的注释），与单段执行同一口径
         const b = await executeSqlBatch(connId, execSql, db, execId.value, cancelController.signal, size, uiSession)
+        if (myGen !== queryGeneration) return
         if (cancelRequested.value) { setResultCancelled(); return }
         showBatchResult(b)
         // 事务模式：批量里有写语句成功 ⇒ 有未提交变更
@@ -5252,6 +5270,7 @@ const runSql = async (page = 1, size = pageSize.value, batchable = true, overrid
         // 都要基于**用户那条原始 SQL** —— 包装体既不是用户写的语句，也不在编辑器里
         const baseSql = sortBaseSql || execSql
         const res = await executeSql(connId, execSql, db, execId.value, cancelController.signal, page, size, false, uiSession)
+        if (myGen !== queryGeneration) return
         if (cancelRequested.value) { setResultCancelled(); return }
         showSingleResult(res)
         // 事务模式：写语句成功 ⇒ 有未提交变更（提示条点亮，提醒 COMMIT/ROLLBACK）
@@ -5265,16 +5284,20 @@ const runSql = async (page = 1, size = pageSize.value, batchable = true, overrid
       }
     }
   } catch (e) {
+    if (myGen !== queryGeneration) return
     if (cancelRequested.value) { setResultCancelled(); return }
     const msg = e?.message || e?.toString?.() || t('common.unknownError')
     resultItems.value = []
     activeResultIdx.value = 0
     result.value = { columns: [], rows: [], success: false, message: msg, executeTime: 0 }
   } finally {
-    if (queryTimer) { clearInterval(queryTimer); queryTimer = null }
-    cancelController = null
-    running.value = false
-    loading.value = false
+    // 只有本轮还有效时才收尾：旧请求的后到响应不能停掉新请求的计时器/运行态
+    if (myGen === queryGeneration) {
+      if (queryTimer) { clearInterval(queryTimer); queryTimer = null }
+      cancelController = null
+      running.value = false
+      loading.value = false
+    }
   }
 }
 

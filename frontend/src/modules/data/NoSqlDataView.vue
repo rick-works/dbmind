@@ -1074,7 +1074,12 @@ const onRowNumDragEnd = () => {
   if (rowDragScrollRaf) { cancelAnimationFrame(rowDragScrollRaf); rowDragScrollRaf = 0 }
   document.removeEventListener('mousemove', onRowNumDragMove)
 }
-onBeforeUnmount(onRowNumDragEnd)
+onBeforeUnmount(() => {
+  onRowNumDragEnd()
+  // 列宽拖拽的 document 监听平时只在 mouseup 里摘；拖拽中切页签 / 鼠标移出窗口松手
+  // 会漏摘，闭包继续持有已卸载组件。卸载时一并清掉。
+  onDragEnd()
+})
 
 // ===== 选中整列（Excel 式）：单击表头选中整列，Ctrl 加减选，Shift 连选；表头拖动连选多列 =====
 const selectedCols = ref(new Set())

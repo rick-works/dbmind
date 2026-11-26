@@ -352,11 +352,12 @@ const detailRows = (row) => {
 
 // ===== CSV =====
 const csvLines = () => {
-  const head = [...groupCols.value, ...metricCols.value.map(metricLabel)].join(',')
   const esc = (s) => {
     const t = s == null ? '' : String(s)
-    return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t
+    return /[",\n\r]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t
   }
+  // 表头同数据列一起转义：列名/指标标签本身可以带逗号、引号，不转会错位
+  const head = [...groupCols.value, ...metricCols.value.map(metricLabel)].map(esc).join(',')
   const body = result.value.map(r => [
     ...groupCols.value.map(c => esc(fmtVal(r.key[c]))),
     ...metricCols.value.map(m => esc(fmtNum(r.vals[m])))

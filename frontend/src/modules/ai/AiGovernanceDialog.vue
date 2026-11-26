@@ -304,18 +304,25 @@ const loading = ref(false)
 
 // 打开时按 initialTab 定位页签（AI 助手的「敏感数据 / 数据容量 / 质量规则 / 质量分析」命令直达）；
 // autoRun 时再直接开跑，省掉「打开 → 再点一次开始扫描」两步
-watch(() => props.modelValue, async (open) => {
+let autoRunSeq = 0
+watch(() => props.modelValue, async (open, _old, onCleanup) => {
+  const seq = ++autoRunSeq
+  let cancelled = false
+  onCleanup(() => { cancelled = true })
   if (!open) return
   const k = props.initialTab
   if (k && tabs.value.some(t => t.key === k)) tab.value = k
   if (!props.autoRun || (tab.value !== 'sensitive' && tab.value !== 'capacity')) return
-  // 数据库列表是异步加载的，没就绪就点「开始扫描」只会弹「请选择数据源与数据库」，这里最多等 3 秒
+  // 数据库列表是异步加载的，没就绪就点「开始扫描」只会弹「请选择数据源与数据库」，这里最多等 3 秒。
+  // 等待期间用户可能已关窗或又开了一次：旧循环必须停，否则关窗后仍在背后开扫、弹错。
   const t0 = Date.now()
   while (!activeConn.value || !database.value) {
-    if (Date.now() - t0 > 3000) return
+    if (cancelled || !props.modelValue || seq !== autoRunSeq || Date.now() - t0 > 3000) return
     await new Promise((r) => setTimeout(r, 120))
   }
+  if (cancelled || !props.modelValue || seq !== autoRunSeq) return
   await nextTick()
+  if (cancelled || !props.modelValue || seq !== autoRunSeq) return
   run()
 })
 

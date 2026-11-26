@@ -15,7 +15,9 @@
 // 数据库函数（NOW()、COALESCE(x,y) 这类「名(…)」形状）与 CURRENT_* 类无括号关键字：
 // 用户写的是 SQL 表达式，任何类型声明下都原样写入（与变量库默认值同口径）。
 const RAW_KEYWORDS_RE = /^(current_(date|time|timestamp|user|schema|catalog)|localtime|localtimestamp|sysdate|systimestamp|today|now)$/i
-const NUM_VALUE_RE = /^-?\d+(\.\d+)?$/
+// 支持 1e10 / +1 / .5 等合法数字字面量：原来把它们判成字符串加引号，
+// 在 ClickHouse / PG 的数值列上直接报类型不匹配
+const NUM_VALUE_RE = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/
 const BOOL_TRUE_RE = /^(true|1|yes|y|是)$/i
 const BOOL_FALSE_RE = /^(false|0|no|n|否)$/i
 

@@ -797,6 +797,38 @@ pub fn chat_tools(model: &ModelEntry, system: &str, messages: &[Value], tools: &
 /// <p>为什么要自己把 `tool_calls` 拼起来：流式协议里它是按 `index` 分包下发的
 /// （`name` 先到、`arguments` 逐段拼），按普通 JSON 取只能拿到半截。
 ///
+/// SSE 一帧可能由多个 `data:` 行组成（折行 / pretty-print JSON）：按空行收帧，
+/// 同帧各行用换行拼接后再解析。返回 None 表示当前没有完整帧。
+fn take_sse_frame(lines: &mut Vec<String>) -> Option<String> {
+    if lines.is_empty() { return None }
+    let joined = lines.join("\n");
+    lines.clear();
+    Some(joined.trim().to_string())
+}
+
+/// 从一帧里取普通对话的文本增量；解析失败记日志而不是静默吞。
+fn chat_frame_text(payload: &str) -> Option<String> {
+    let value: Value = match serde_json::from_str(payload) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("模型流里有一帧不是合法 JSON，已跳过：{e}；原文={}", &payload[..payload.len().min(500)]);
+            return None;
+        }
+    };
+    value.get("choices")
+        .and_then(Value::as_array)
+        .and_then(|c| c.first())
+        .and_then(|c| c.get("delta"))
+        .and_then(|d| d.get("content"))
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+fn parse_usage_str(payload: &str) -> Option<TokenUsage> {
+    serde_json::from_str::<Value>(payload).ok().and_then(|v| parse_usage(&v))
+}
+
 /// <p>智能体要「深度思考过程可见」就靠它：模型的每一段话边说边到界面，
 /// 工具调用照样能在循环里拿到完整参数。
 pub fn chat_tools_stream(
@@ -826,26 +858,48 @@ pub fn chat_tools_stream(
     let mut usage: Option<TokenUsage> = None;
     // index -> (id, name, arguments)：同一轮里可能并列多个工具调用
     let mut calls: Vec<(String, String, String)> = Vec::new();
+    // SSE 规范允许一个事件用多个 data: 行（长行折行 / pretty-print JSON）：
+    // 按行逐条 from_str 会把每一段都当半截 JSON 丢掉。按空行分帧、同帧 data 行拼接。
+    let mut sse_data: Vec<String> = Vec::new();
     for line in reader.lines() {
         let line = line.map_err(|e| XError::internal(format!("读取模型流失败：{e}")))?;
-        let line = line.trim();
-        if !line.starts_with("data:") {
+        let line = line.trim_end_matches(['\r', '\n']);
+        if line.is_empty() {
+            if let Some(payload) = take_sse_frame(&mut sse_data) {
+                if payload == "[DONE]" { break }
+                handle_sse_payload(&payload, &mut content, &mut usage, &mut calls, &mut on_delta)?;
+            }
             continue;
         }
-        let payload = line[5..].trim();
-        if payload.is_empty() {
-            continue;
+        if let Some(rest) = line.strip_prefix("data:") {
+            sse_data.push(rest.trim_start().to_string());
         }
-        if payload == "[DONE]" {
-            break;
+        // 其他行（event:/id:/: 注释）按规范忽略
+    }
+    // 流结束可能没有末尾空行，把残留的一帧也处理掉
+    if let Some(payload) = take_sse_frame(&mut sse_data) {
+        if payload != "[DONE]" {
+            handle_sse_payload(&payload, &mut content, &mut usage, &mut calls, &mut on_delta)?;
         }
+    }
+
+    fn handle_sse_payload(
+        payload: &str,
+        content: &mut String,
+        usage: &mut Option<TokenUsage>,
+        calls: &mut Vec<(String, String, String)>,
+        on_delta: &mut impl FnMut(&str),
+    ) -> XResult<()> {
         let value: Value = match serde_json::from_str(payload) {
             Ok(value) => value,
-            // 上游切包导致半截 JSON 是正常的，跳过
-            Err(_) => continue,
+            Err(e) => {
+                // 解析失败不能静默吞：记下原文，方便排查网关返回的怪帧
+                tracing::warn!("模型流里有一帧不是合法 JSON，已跳过：{e}；原文={}", &payload[..payload.len().min(500)]);
+                return Ok(());
+            }
         };
         if let Some(seen) = parse_usage(&value) {
-            usage = Some(seen);
+            *usage = Some(seen);
         }
         let Some(delta) = value
             .get("choices")
@@ -853,7 +907,7 @@ pub fn chat_tools_stream(
             .and_then(|choices| choices.first())
             .and_then(|choice| choice.get("delta"))
         else {
-            continue;
+            return Ok(());
         };
         if let Some(text) = delta.get("content").and_then(Value::as_str) {
             if !text.is_empty() {
@@ -863,15 +917,24 @@ pub fn chat_tools_stream(
         }
         if let Some(items) = delta.get("tool_calls").and_then(Value::as_array) {
             for item in items {
-                let index = item.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+                // 兼容不带 index 的 OpenAI 兼容网关：优先按 id 定位同一个调用。
+                // 原来一律 unwrap_or(0)，多次调用全挤进 slot 0，name/args 被拼成一坨。
+                let id = item.get("id").and_then(Value::as_str).filter(|s| !s.is_empty());
+                let index = item
+                    .get("index")
+                    .and_then(Value::as_u64)
+                    .map(|n| n as usize)
+                    .or_else(|| id.and_then(|id| calls.iter().position(|c| c.0 == id)))
+                    .unwrap_or_else(|| {
+                        // 既无 index 也无 id：找第一个还没拿到名字的空槽，按到达顺序排
+                        calls.iter().position(|c| c.1.is_empty()).unwrap_or(calls.len())
+                    });
                 while calls.len() <= index {
                     calls.push((String::new(), String::new(), String::new()));
                 }
                 let slot = &mut calls[index];
-                if let Some(id) = item.get("id").and_then(Value::as_str) {
-                    if !id.is_empty() {
-                        slot.0 = id.to_string();
-                    }
+                if let Some(id) = id {
+                    slot.0 = id.to_string();
                 }
                 if let Some(function) = item.get("function") {
                     if let Some(name) = function.get("name").and_then(Value::as_str) {
@@ -885,6 +948,7 @@ pub fn chat_tools_stream(
                 }
             }
         }
+        Ok(())
     }
     if content.trim().is_empty() && calls.iter().all(|(_, name, _)| name.is_empty()) {
         return Err(XError::internal("模型既没有内容也没有工具调用（流式响应为空）"));
@@ -932,41 +996,28 @@ pub fn chat_stream(
     let mut produced = false;
     // 流末那一帧的 usage（见上面的 stream_options）
     let mut usage: Option<TokenUsage> = None;
+    // 与 chat_tools_stream 同口径：按空行分帧、同帧多行 data 拼接，
+    // 别把 SSE 折行产生的半截 JSON 静默丢掉（token 计数也会跟着偏少）。
+    let mut sse_data: Vec<String> = Vec::new();
     for line in reader.lines() {
         let line = line.map_err(|e| XError::internal(format!("读取模型流失败：{e}")))?;
-        let line = line.trim();
-        //上游这一跳的协议是 OpenAI 的 SSE：`data: {...}`，结束是 `data: [DONE]`
-        if !line.starts_with("data:") {
-            continue;
-        }
-        let payload = line[5..].trim();
-        if payload.is_empty() {
-            continue;
-        }
-        if payload == "[DONE]" {
-            break;
-        }
-        let value: Value = match serde_json::from_str(payload) {
-            Ok(value) => value,
-            // 分片不是完整 JSON 是正常的（上游会切包），跳过而不是报错
-            Err(_) => continue,
-        };
-        // 带 usage 的那一帧通常 choices 为空，单独取（后到的覆盖先前的，取最后一次）
-        if let Some(seen) = parse_usage(&value) {
-            usage = Some(seen);
-        }
-        if let Some(delta) = value
-            .get("choices")
-            .and_then(Value::as_array)
-            .and_then(|choices| choices.first())
-            .and_then(|choice| choice.get("delta"))
-            .and_then(|delta| delta.get("content"))
-            .and_then(Value::as_str)
-        {
-            if !delta.is_empty() {
-                produced = true;
-                on_delta(delta);
+        let line = line.trim_end_matches(['\r', '\n']);
+        if line.is_empty() {
+            if let Some(payload) = take_sse_frame(&mut sse_data) {
+                if payload == "[DONE]" { break }
+                if let Some(text) = chat_frame_text(&payload) { produced = true; on_delta(&text) }
+                if let Some(seen) = parse_usage_str(&payload) { usage = Some(seen) }
             }
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("data:") {
+            sse_data.push(rest.trim_start().to_string());
+        }
+    }
+    if let Some(payload) = take_sse_frame(&mut sse_data) {
+        if payload != "[DONE]" {
+            if let Some(text) = chat_frame_text(&payload) { produced = true; on_delta(&text) }
+            if let Some(seen) = parse_usage_str(&payload) { usage = Some(seen) }
         }
     }
     if !produced {
