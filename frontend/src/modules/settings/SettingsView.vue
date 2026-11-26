@@ -1467,6 +1467,7 @@ import { getAppearance, saveAppearance, appearanceDefaults } from '../../utils/a
 // `LOCALES` 直接当语言选项用：它里面每个选项的 label 都写着自己的语言，不需要再包一层
 import { LOCALES as localeOptions, locale, setLocale, t } from '../../utils/i18n'
 import { formatSql, keywordCandidates, sqlKeywordPattern, ruleHasIndent } from '../../utils/sqlFormat'
+import { saveGenerated } from '../../utils/useExportTask'
 import { getAiConfig, saveAiConfig, aiChat, getPathSettings, savePathSettings, browseBackupDirs, getDriverMirror, saveDriverMirror, getDriverTypes, getDriverStatus, getDriverProgress, installDriver, uploadDriver, openLocalDir, getAiUsage, getSettings, putSetting, exportConfig, importConfig, clearSchemaCache, clearHistory, getLegacyTls, saveLegacyTls, getCacheItems, clearCaches, listConnections, getLogs, clearLogs, getMaskRules, saveMaskRules, listDatabases, listSchemas, listTables, listColumns, getFeatures } from '../../api'
 // 表格里的打码用同一份配置（前端同算法）：设置页保存后顺手同步给 utils/masking 的缓存
 import { setMaskConfig as applyMaskRules } from '../../utils/masking'
@@ -2102,17 +2103,19 @@ const applyMaskWizard = () => {
 /** 配置包导出 / 导入（团队共享偏好与规则；密钥、连接口令都不在里面） */
 const configFileRef = ref(null)
 const doExportConfig = async () => {
-  try {
-    const data = await exportConfig()
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `dbmind-config-${new Date().toISOString().slice(0, 10)}.json`
-    document.body.appendChild(a); a.click(); a.remove()
-    URL.revokeObjectURL(url)
-    ElMessage.success(t('settings.config.exported'))
-  } catch (e) { ElMessage.error(e?.message || String(e)) }
+  const filename = `dbmind-config-${new Date().toISOString().slice(0, 10)}.json`
+  const res = await saveGenerated({
+    filename,
+    types: [{ description: 'JSON', accept: { 'application/json': ['.json'] } }],
+    title: t('settings.config.export'),
+    // 选完目录才拉配置、生成内容：既保证"先选后导"，也不会白拉一次接口
+    generate: async () => {
+      const data = await exportConfig()
+      return new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    }
+  })
+  if (res.canceled || !res.ok) return
+  ElMessage.success(t('settings.config.exported'))
 }
 const triggerImportConfig = () => configFileRef.value?.click()
 const onConfigFile = async (e) => {
@@ -2254,7 +2257,7 @@ const randomAesKey = () => {
 
 // ---------- 存储路径 ----------
 /** 数据目录迁移已接入（后端：快照 + 复制 + 指针文件，热切换立即生效）；驱动跟着数据目录走，不单独设置 */
-const pathInfo = ref({ os: '', osLabel: '', homeDir: '', defaultDataDir: '', defaultDriverDir: '', dataDir: '', driverDir: '', pluginDir: '', exportDir: '' })
+const pathInfo = ref({ os: '', osLabel: '', homeDir: '', defaultDataDir: '', defaultDriverDir: '', dataDir: '', driverDir: '', pluginDir: '' })
 const pathForm = ref({ dataDir: '' })
 const savingPath = ref(false)
 const osTagText = computed(() => ({ windows: 'Windows', mac: 'macOS', linux: 'Linux', other: t('settings.paths.osOther') }[pathInfo.value.os] || t('settings.paths.osUnknown')))

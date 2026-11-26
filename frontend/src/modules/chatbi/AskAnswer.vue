@@ -193,6 +193,7 @@ import DataTable from './DataTable.vue'
 import { CHART_TYPES, chartTypeLabel } from './chartSpec'
 import { renderMarkdown } from '../../utils/markdown.js'
 import { formatSql } from '../../utils/sqlFormat.js'
+import { saveGenerated } from '../../utils/useExportTask.js'
 
 const props = defineProps({
   /** `/api/ai/ask` 的返回体 */
@@ -471,17 +472,25 @@ const setChartType = (index, type) => {
   })
 }
 
-const downloadChart = (index) => {
+const downloadChart = async (index) => {
   const inst = chartRefs.get(index)
-  const url = inst && inst.toDataURL ? inst.toDataURL() : ''
-  if (!url) {
+  if (!inst || !inst.toDataURL) {
     ElMessage.warning('当前图表还不能导出')
     return
   }
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `${props.answer?.charts?.[index]?.title || 'chart'}.png`
-  a.click()
+  const filename = `${props.answer?.charts?.[index]?.title || 'chart'}.png`
+  // 先选目录再出图：dataURL 可能很大，没必要在用户还没决定存哪时就生成
+  const res = await saveGenerated({
+    filename,
+    types: [{ description: 'PNG', accept: { 'image/png': ['.png'] } }],
+    generate: async () => {
+      const url = inst.toDataURL()
+      if (!url) throw new Error('当前图表还不能导出')
+      const blob = await (await fetch(url)).blob()
+      return blob
+    }
+  })
+  if (res.canceled || !res.ok) return
 }
 
 const copy = async (text) => {
@@ -494,7 +503,7 @@ const copy = async (text) => {
 }
 
 /** 把结果集导出成 CSV（带 BOM，Excel 直接打开中文不乱码）。空结果不给按钮，这里再兜底一次。 */
-const exportCsv = () => {
+const exportCsv = async () => {
   const ans = props.answer || {}
   const cols = (ans.columns || []).filter((c) => c && c !== '__row')
   const rows = Array.isArray(ans.rows) ? ans.rows : []
@@ -502,24 +511,23 @@ const exportCsv = () => {
     ElMessage.warning('没有可导出的数据')
     return
   }
-  const escape = (value) => {
-    if (value === null || value === undefined) return ''
-    const text = String(value)
-    return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
-  }
-  const lines = [cols.join(',')]
-  for (const row of rows) {
-    lines.push(cols.map((c) => escape(row ? row[c] : '')).join(','))
-  }
-  const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `${(ans.question || 'ask').replace(/[\\/:*?"<>|]/g, '_')}.csv`
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  URL.revokeObjectURL(url)
+  const filename = `${(ans.question || 'ask').replace(/[\\/:*?"<>|]/g, '_')}.csv`
+  await saveGenerated({
+    filename,
+    types: [{ description: 'CSV', accept: { 'text/csv': ['.csv'] } }],
+    generate: () => {
+      const escape = (value) => {
+        if (value === null || value === undefined) return ''
+        const text = String(value)
+        return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
+      }
+      const lines = [cols.join(',')]
+      for (const row of rows) {
+        lines.push(cols.map((c) => escape(row ? row[c] : '')).join(','))
+      }
+      return new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' })
+    }
+  })
 }
 </script>
 

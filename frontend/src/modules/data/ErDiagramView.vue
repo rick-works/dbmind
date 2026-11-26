@@ -71,7 +71,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
-import { saveBlobAs } from '../../utils/useExportTask'
+import { saveGenerated } from '../../utils/useExportTask'
 import { ElMessage } from 'element-plus'
 import { ZoomIn, ZoomOut, FullScreen, Refresh, Download, Search, Connection, Loading, WarningFilled, InfoFilled } from '@element-plus/icons-vue'
 import dagre from 'dagre'
@@ -375,36 +375,44 @@ const buildExportSvg = () => {
   return s
 }
 
-const download = (blob, filename) => {
-  saveBlobAs(blob, filename)
-  setTimeout(() => URL.revokeObjectURL(url), 4000)
-}
+const exportName = (ext) => `er-${props.database || 'db'}-${Date.now()}.${ext}`
 
 const exportSvg = () => {
   if (!nodes.value.length) { ElMessage.warning(t('er.nothingToExport')); return }
-  const blob = new Blob([buildExportSvg()], { type: 'image/svg+xml;charset=utf-8' })
-  download(blob, `er-${props.database || 'db'}-${Date.now()}.svg`)
+  // 先选保存位置，再构建 SVG（用户手势内先弹另存为）
+  saveGenerated({
+    filename: exportName('svg'),
+    types: [{ description: 'SVG', accept: { 'image/svg+xml': ['.svg'] } }],
+    generate: () => new Blob([buildExportSvg()], { type: 'image/svg+xml;charset=utf-8' })
+  })
 }
 const exportPng = () => {
   if (!nodes.value.length) { ElMessage.warning(t('er.nothingToExport')); return }
-  const s = buildExportSvg()
-  const img = new Image()
-  img.onload = () => {
-    const b = bbox(); const pad = 24
-    const scale = 2
-    const canvas = document.createElement('canvas')
-    canvas.width = (b.w + pad * 2) * scale
-    canvas.height = (b.h + pad * 2) * scale
-    const ctx = canvas.getContext('2d')
-    ctx.scale(scale, scale)
-    ctx.drawImage(img, 0, 0)
-    canvas.toBlob(blob => {
-      if (!blob) { ElMessage.error(t('er.exportPngFailed')); return }
-      download(blob, `er-${props.database || 'db'}-${Date.now()}.png`)
-    }, 'image/png')
-  }
-  img.onerror = () => ElMessage.error(t('er.exportPngFailed'))
-  img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(s)
+  // PNG 要异步过 canvas，同样先选位置
+  saveGenerated({
+    filename: exportName('png'),
+    types: [{ description: 'PNG', accept: { 'image/png': ['.png'] } }],
+    generate: () => new Promise((resolve, reject) => {
+      const s = buildExportSvg()
+      const img = new Image()
+      img.onload = () => {
+        const b = bbox(); const pad = 24
+        const scale = 2
+        const canvas = document.createElement('canvas')
+        canvas.width = (b.w + pad * 2) * scale
+        canvas.height = (b.h + pad * 2) * scale
+        const ctx = canvas.getContext('2d')
+        ctx.scale(scale, scale)
+        ctx.drawImage(img, 0, 0)
+        canvas.toBlob(blob => {
+          if (!blob) reject(new Error(t('er.exportPngFailed')))
+          else resolve(blob)
+        }, 'image/png')
+      }
+      img.onerror = () => reject(new Error(t('er.exportPngFailed')))
+      img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(s)
+    })
+  })
 }
 
 const load = async () => {

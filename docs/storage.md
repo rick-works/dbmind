@@ -20,7 +20,6 @@
 |---|---|---|
 | `dataDir` | `<store 父目录>`（即 `~/.dbmind`） | `crates/dbmind-web/src/api/sys.rs:130-147` |
 | `driverDir` | `<dataDir>/drivers` | 同上 |
-| `exportDir` | `<dataDir>/work` | 同上 |
 
 **想搬家**：设 `DBMIND_HOME` 指向新目录，重启即可，所有文件跟着走。
 
@@ -31,7 +30,7 @@
 
 | 动作 | 说明 | 代码 |
 |---|---|---|
-| 建齐目录骨架 | `drivers/` `exports/` `logs/` `prompts/` `work/tmp` `work/restore` `backups/` | `dbmind-core/src/bootstrap.rs` |
+| 建齐目录骨架 | `drivers/` `logs/` `prompts/` `work/tmp` `work/restore` `backups/` | `dbmind-core/src/bootstrap.rs` |
 | 释放提示词模板 | `prompts/*.md` 共 20 个内置模板，缺哪个补哪个（**不覆盖**用户改过的） | `api/ai/prompts.rs` |
 | 记下初始化标记 | `app_settings.initializedAt` | `bootstrap.rs` |
 
@@ -108,7 +107,7 @@ dbmind.db-shm     共享内存索引
 > 只会把一次读写变成 N 次往返，换不来任何查询能力。
 >
 > **仍然留在文件里的**：`prompts/*.md`（提示词模板，要能直接用编辑器改）、
-> `drivers/*.jar`（二进制缓存）、`exports/` `backups/` `work/`（产物与流式临时文件）、
+> `drivers/*.jar`（二进制缓存）、`backups/` `work/`（备份与流式临时文件）、
 > `logs/` 与 `agent-hosts`（进程 stderr；JVM 要的是一个**文件路径**）。
 
 ---
@@ -119,7 +118,7 @@ dbmind.db-shm     共享内存索引
 |---|---|---|---|
 | `drivers/<agentKey>/*.jar` | 驱动 jar 缓存 | 二进制；搜索路径含 `DBMIND_DRIVER_DIRS` | `dbmind-core/src/agent.rs:420-541`、`:425-431` |
 | `logs/agent-<id>.err.log` | Java 代理的 JVM stderr | 文本，**覆盖写**（只留最后一次） | `agent.rs:167-181` |
-| `exports/` | 导出产物 | CSV / JSON / XLSX / SQL / ZIP | `api/tasks.rs:402-404`、`api/export.rs:781,894,927,1086` |
+| 导出中转 | 系统临时目录 `%TEMP%/dbmind-exports/` | 前端取回后按用户所选位置落盘，取回即删；进程启动时清空 | `api/tasks.rs:913-938`、`api/export.rs` 的 download/save |
 | `work/tmp/sync_<stamp>.<ext>` | 同步导入的临时文件 | **读完即删** | `export.rs:1090-1095` |
 | `work/restore/<stamp>_<name>` | 上传的备份暂存 | 还原期间保留（会多次读取） | `api/backup.rs:1391-1398` |
 | `backups/` | 备份产物 + 写探针 `.dbmind-write-test-*` | 探针用于验证目录可写 | `backup.rs:369-371,395,975,1187` |
@@ -187,7 +186,7 @@ dbmind.db-shm     共享内存索引
 
 1. **凭据形态**：`connections.password` 现在是**密文**（`enc:v2:` + AES-256-GCM + 每次随机 nonce，密钥在 `app_settings.app.secretKey`，跟机器/用户绑定），历史明文与早期的 `enc:v1:`（确定性 nonce）在启动时自动迁移；`ai_settings` / `ai_models` 的 `api_key` 仍是明文（未纳入这一轮）。整个 `~/.dbmind` 目录依然不要随意外发。"导出连接"生成的包默认**不含口令**；勾了「导出密码」带出去的是**密文**，只能在同一台机器上解回来（换机器导入等于没填口令），所以那个包也不再是"拿到就能连"的东西。
 2. **备份**：先停服，再整体拷贝 `~/.dbmind`；至少要连 `dbmind.db-wal` / `-shm` 一起拷。
-3. **清理磁盘**：占用大头通常是 `dbmind.db`、`exports/`、`backups/`、`work/`、`drivers/`、`logs/`。审计记录现在在 `ai_audit` 表里（以前是只增不减的 `ai-audit.log`），长期使用可以直接删旧行：`DELETE FROM ai_audit WHERE time < '2026-01-01'`。
+3. **清理磁盘**：占用大头通常是 `dbmind.db`、`backups/`、`work/`、`drivers/`、`logs/`。审计记录现在在 `ai_audit` 表里（以前是只增不减的 `ai-audit.log`），长期使用可以直接删旧行：`DELETE FROM ai_audit WHERE time < '2026-01-01'`。
 4. **迁移**：设 `DBMIND_HOME` 指向新目录即可，所有文件跟着走。
 5. **排查"某个设置有没生效"**：多半在 `dbmind.db` 的 `app_settings`，或前端的 `localStorage`（前缀 `dbmind_` / `dc_` / `dbmind.`）。
 
@@ -196,7 +195,7 @@ dbmind.db-shm     共享内存索引
 ## 7. 新增存储点时的约定（给后续改动）
 
 - **后端**：一律落到 `paths::home_dir()` 之下，别写死绝对路径、别写到当前工作目录。
-- **默认进主库 `dbmind.db` 立表**（同一份文件、一个事务、一个备份目标；能直接用 SQL 汇总与清理）。只有这几类才留成文件：**必须让用户直接拿走的产物**（`exports/`）、**必须能直接用编辑器改**的（`prompts/*.md`）、**二进制缓存**（`drivers/*.jar`）、**必须是文件路径**的（`agent-hosts`）、以及**流式大文件**（`work/`、`backups/`）。
+- **默认进主库 `dbmind.db` 立表**（同一份文件、一个事务、一个备份目标；能直接用 SQL 汇总与清理）。只有这几类才留成文件：**必须能直接用编辑器改**的（`prompts/*.md`）、**二进制缓存**（`drivers/*.jar`）、**必须是文件路径**的（`agent-hosts`）、以及**流式大文件**（`work/`、`backups/`）。导出产物由用户自己选落盘位置，服务端只用系统临时目录中转、取回即删，不再保留用户可见的导出目录。
 - 新增表统一写在 `storage.rs` 的 `SCHEMA` 常量里（全是 `CREATE TABLE IF NOT EXISTS`，没有版本号机制）；行的读写方法也写在 `Store` 上，别在壳层裸写 SQL。
 - **前端**：设置类一律 `localStorage` + `dbmind_` 前缀；会话级（随标签页失效）用 `sessionStorage`；**别引入 cookie**（桌面端不需要、还会带上隐私问题）。
 - **新加键/文件时，顺手在这一份 `STORAGE.md` 里补一行** —— 这份文档的价值全在"全"。

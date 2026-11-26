@@ -693,7 +693,7 @@ async fn cache_list(State(state): State<AppState>) -> ApiResult {
         .collect();
     for (key, dir) in [
         ("backups", home.join("backups")),
-        ("exports", dbmind_core::paths::work_dir()),
+        ("work", dbmind_core::paths::work_dir()),
         ("logs", home.join("logs")),
     ] {
         let (files, bytes) = dir_stats(&dir);
@@ -709,7 +709,7 @@ struct CacheClearBody {
 
 /// 清理勾选的缓存项。表类删行数，文件类删文件（被占用的跳过并如实回报）。
 async fn cache_clear(State(state): State<AppState>, Json(body): Json<CacheClearBody>) -> ApiResult {
-    const FILE_KEYS: &[&str] = &["backups", "exports", "logs"];
+    const FILE_KEYS: &[&str] = &["backups", "work", "logs"];
     let file_keys: Vec<String> = body
         .keys
         .iter()
@@ -731,7 +731,7 @@ async fn cache_clear(State(state): State<AppState>, Json(body): Json<CacheClearB
     for key in file_keys {
         let dir = match key.as_str() {
             "backups" => dbmind_core::paths::home_dir().join("backups"),
-            "exports" => dbmind_core::paths::work_dir(),
+            "work" => dbmind_core::paths::work_dir(),
             _ => dbmind_core::paths::home_dir().join("logs"),
         };
         results.push(json!({ "key": key, "files": clear_dir_files(&dir) }));

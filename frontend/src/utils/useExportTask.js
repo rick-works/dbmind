@@ -77,40 +77,54 @@ function pickerTypes(format) {
 }
 
 /**
- * 让用户选位置并保存（所有导出/下载最终都走这里）。
+ * 【底层】只负责「挑保存位置」，不碰文件内容。
  *
- * filename 是**完整文件名**（含扩展名）—— 各处的导出自己已经拼好了名字，
- * 这里只负责弹系统另存为 + 写盘；拿不到原生另存为（非 Chrome 内核 / 没有用户手势）
- * 就退回普通浏览器下载，至少能落盘。
+ * 抽出来的原因：所有导出都要「先选目录、再生成/执行」，而 showSaveFilePicker 必须在
+ * 用户手势内调用 —— 原来 saveBlobAs 把「选位置 + 写盘」绑在一起，只能先有 blob 再弹框，
+ * 长任务跑完时手势早过期。现在调用方可以在点按钮的这一刻先 pickSaveTarget 拿到句柄，
+ * 内容生成完再 saveToTarget 写进去。
+ *
+ * 返回：FileSystemFileHandle / { nativePath, nativeName }（桌面壳 WebKit）/
+ *       { canceled: true } / { failed: true } / null（非桌面壳、无 API，走浏览器下载兜底）
  */
-export async function saveBlobAs(blob, filename, types, opts = {}) {
+export async function pickSaveTarget(filename, types, title = '') {
   if (typeof window.showSaveFilePicker === 'function') {
     try {
-      const handle = await window.showSaveFilePicker({ suggestedName: filename, types })
-      const w = await handle.createWritable()
-      await w.write(blob)
-      await w.close()
-      return { ok: true, name: handle.name || filename }
+      return await window.showSaveFilePicker({ suggestedName: filename, types })
     } catch (err) {
-      // 用户主动取消：不算失败，也不再退回下载
-      if (err && err.name === 'AbortError') return { ok: false, canceled: true }
-      // SecurityError 等（没有用户手势）：退回普通下载，别让整个导出白跑
+      // 用户主动取消：不再退回下载；SecurityError 等（手势过期）继续走下面的兜底
+      if (err && err.name === 'AbortError') return { canceled: true }
     }
   }
-  // 桌面壳但没有原生另存为 API（macOS / Linux）：弹系统保存面板，再让内核落盘
-  const native = await pickNativeSavePath(filename, opts.title)
-  if (native && native.canceled) return { ok: false, canceled: true }
-  if (native && native.path) {
+  const native = await pickNativeSavePath(filename, title)
+  if (!native) return desktopShell.available ? { failed: true } : null
+  if (native.canceled) return { canceled: true }
+  return { nativePath: native.path, nativeName: baseName(native.path) }
+}
+
+/**
+ * 【底层】把字节写进已挑好的位置。target 为空时退回普通浏览器下载。
+ */
+export async function saveToTarget(blob, filename, types, target, title = '') {
+  if (target && target.nativePath) {
     try {
-      await writeBytesToPath(blob, native.path)
-      return { ok: true, name: baseName(native.path) }
+      await writeBytesToPath(blob, target.nativePath)
+      return { ok: true, name: target.nativeName || baseName(target.nativePath) }
     } catch (err) {
       return failSave(err)
     }
   }
-  // 在桌面壳里却连对话框都没弹出来（IPC 被拒 / 壳命令缺失）：**不要**静默落到
-  // 「下载」目录 —— 那样用户只看到一句「导出成功」，根本不知道文件去哪了
-  // （这正是 mac 上"没让我选位置"的观感）。宁可明确报错。
+  if (target) {
+    try {
+      const w = await target.createWritable()
+      await w.write(blob)
+      await w.close()
+      return { ok: true, name: target.name || filename }
+    } catch (err) {
+      return failSave(err)
+    }
+  }
+  // 在桌面壳里却连对话框都没弹出来：宁可明确报错，也不静默落到「下载」目录
   if (desktopShell.available) return failSave(new Error(t('mv.saveDialogFailed')))
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
@@ -122,6 +136,41 @@ export async function saveBlobAs(blob, filename, types, opts = {}) {
 }
 
 /**
+ * 生成内容后保存（兼容老调用方：选位置发生在生成之后）。
+ * 新代码请用 saveGenerated —— 那种才是「先选目录再导出」。
+ */
+export async function saveBlobAs(blob, filename, types, opts = {}) {
+  const target = await pickSaveTarget(filename, types, opts.title)
+  if (target && target.canceled) return { ok: false, canceled: true }
+  if (target && target.failed) return failSave(new Error(t('mv.saveDialogFailed')))
+  return saveToTarget(blob, filename, types, target, opts.title)
+}
+
+/**
+ * 【推荐】所有同步导出的统一入口：**先让用户选保存位置，再生成内容，最后写入**。
+ *
+ * generate 可以同步也可以异步（返回 Blob / Promise<Blob>）。选位置这一步放在最前面，
+ * 保证 showSaveFilePicker 还在用户手势内 —— 这正是「导出前先选目录」与「导出完才让选」
+ * 的分界线。用户取消则 generate 根本不会执行。
+ */
+export async function saveGenerated({ filename, types, generate, title = '' }) {
+  const target = await pickSaveTarget(filename, types, title)
+  if (target && target.canceled) return { ok: false, canceled: true }
+  if (target && target.failed) {
+    ElMessage.error(t('mv.saveDialogFailed'))
+    return { ok: false }
+  }
+  let blob
+  try {
+    blob = await generate()
+  } catch (err) {
+    return failSave(err)
+  }
+  if (!blob) return { ok: false }
+  return saveToTarget(blob, filename, types, target, title)
+}
+
+/**
  * 让用户选「保存到哪」，然后把内容写进去。
  *
  * 优先用浏览器原生的另存为对话框（File System Access API，Chrome/Edge 支持，
@@ -130,18 +179,7 @@ export async function saveBlobAs(blob, filename, types, opts = {}) {
  * handle 是导出前那次挑选留下的，异步任务跑完直接往它里面写。
  */
 export async function saveExportBlob(blob, name, format, handle = null) {
-  const filename = exportFileName(name, format)
-  if (handle) {
-    try {
-      const w = await handle.createWritable()
-      await w.write(blob)
-      await w.close()
-      return { ok: true, name: handle.name || filename }
-    } catch (err) {
-      return failSave(err)
-    }
-  }
-  return saveBlobAs(blob, filename, pickerTypes(format))
+  return saveToTarget(blob, exportFileName(name, format), pickerTypes(format), handle)
 }
 
 /**
@@ -152,22 +190,7 @@ export async function saveExportBlob(blob, name, format, handle = null) {
  * 返回：FileSystemFileHandle / { canceled: true }（用户取消）/ null（不支持，走退回路径）
  */
 export async function pickExportTarget(name, format) {
-  const filename = exportFileName(name, format)
-  if (typeof window.showSaveFilePicker === 'function') {
-    try {
-      return await window.showSaveFilePicker({ suggestedName: filename, types: pickerTypes(format) })
-    } catch (err) {
-      if (err && err.name === 'AbortError') return { canceled: true }
-      return null
-    }
-  }
-  // 桌面壳的 WebKit（macOS / Linux）：没有上面的 API，改用系统保存面板，
-  // 拿到的绝对路径交给内核直接落盘（见 finishExport 的 nativePath 分支）
-  const native = await pickNativeSavePath(filename)
-  // 壳在、面板没弹出来：返回 failed，让调用方明确报错 —— 不能"悄悄导出到下载目录"
-  if (!native) return desktopShell.available ? { failed: true } : null
-  if (native.canceled) return { canceled: true }
-  return { nativePath: native.path, nativeName: baseName(native.path) }
+  return pickSaveTarget(exportFileName(name, format), pickerTypes(format))
 }
 
 /**

@@ -8,7 +8,7 @@
 //!
 //! ## 只做两件事（全部幂等，重复启动无副作用）
 //!
-//! 1. **把数据目录的骨架建齐**（drivers / exports / logs / prompts / work / backups）；
+//! 1. **把数据目录的骨架建齐**（drivers / logs / prompts / work / backups）；
 //! 2. 写下初始化标记（`app_settings.initializedAt`）—— 以后要做"仅首次"的事情时有个依据。
 //!
 //! ## 刻意不做的：塞示例数据
@@ -50,7 +50,6 @@ impl InitReport {
 fn layout(home: &Path) -> Vec<(&'static str, PathBuf)> {
     vec![
         ("drivers", home.join("drivers")),
-        ("exports", home.join("exports")),
         ("logs", home.join("logs")),
         ("prompts", home.join("prompts")),
         ("work/tmp", home.join("work").join("tmp")),
@@ -134,7 +133,7 @@ mod tests {
 
         let report = ensure_first_run_in(&store, home).unwrap();
         assert!(!report.created_dirs.is_empty(), "应该建出目录骨架");
-        for dir in ["drivers", "exports", "logs", "prompts", "work", "backups"] {
+        for dir in ["drivers", "logs", "prompts", "work", "backups"] {
             assert!(home.join(dir).is_dir(), "{dir} 应该被建出来");
         }
         assert!(home.join("work").join("tmp").is_dir());
@@ -181,6 +180,6 @@ mod tests {
             .get_setting(SETTINGS_INITIALIZED_AT)
             .unwrap()
             .is_some());
-        assert!(home.join("exports").is_dir());
+        assert!(home.join("work").is_dir());
     }
 }

@@ -237,7 +237,7 @@
 
 <script setup>
 import { ref, computed, watch, onMounted, nextTick } from 'vue'
-import { saveBlobAs } from '../../utils/useExportTask'
+import { saveGenerated } from '../../utils/useExportTask'
 import { ElMessage } from 'element-plus'
 import { Files, Download, Loading } from '@element-plus/icons-vue'
 import { aiQualityTypes, aiQualityConfigured, aiQualityScan, aiQualityReport, aiQualityViolations } from '../../api'
@@ -553,17 +553,17 @@ const downloadReport = async (command) => {
   const fmt = command || 'excel'
   reportExporting.value = true
   try {
-    const r = await aiQualityReport({
-      connectionId: props.conn?.id || '',
-      format: fmt,
-      scan: scanResult.value
+    const saved = await downloadText(`data-quality-report.${fmt === 'csv' ? 'csv' : 'xls'}`, async () => {
+      const r = await aiQualityReport({
+        connectionId: props.conn?.id || '',
+        format: fmt,
+        scan: scanResult.value
+      })
+      if (!r || !r.success || !r.content) throw new Error(r?.message || t('qa.reportFailed'))
+      return new Blob([r.content], { type: 'text/csv;charset=utf-8' })
     })
-    if (r && r.success && r.content) {
-      downloadText(r.content, r.filename || `data-quality-report.${fmt === 'csv' ? 'csv' : 'xls'}`)
-      ElMessage.success(t('qa.downloadStarted'))
-    } else {
-      ElMessage.error(r?.message || t('qa.reportFailed'))
-    }
+    if (saved.canceled || saved.ok === false) return
+    ElMessage.success(t('qa.downloadStarted'))
   } catch (e) {
     ElMessage.error(e?.message || t('qa.reportFailed'))
   } finally {
@@ -708,24 +708,26 @@ const exportViolationsFile = async (cmd) => {
     return
   }
 
-  // 当前页
+  // 当前页：先选目录，再让后端生成违规数据
   violationsExporting.value = true
+  let exportedRows = 0
   try {
     const offset = (violationsPageNo.value - 1) * violationsPageSize.value
-    const r = await aiQualityViolations({
-      connectionId: conn.id,
-      database: props.database,
-      table: tb,
-      offset,
-      limit: violationsPageSize.value,
-      format
+    const saved = await downloadText(`quality-violations.${format === 'csv' ? 'csv' : 'xls'}`, async () => {
+      const r = await aiQualityViolations({
+        connectionId: conn.id,
+        database: props.database,
+        table: tb,
+        offset,
+        limit: violationsPageSize.value,
+        format
+      })
+      if (!r || !r.success || !r.content) throw new Error(r?.message || t('qa.exportFailed'))
+      exportedRows = r.rowCount
+      return new Blob([r.content], { type: 'text/csv;charset=utf-8' })
     })
-    if (!r || !r.success || !r.content) {
-      ElMessage.error(r?.message || t('qa.exportFailed'))
-      return
-    }
-    downloadText(r.content, r.filename || `quality-violations.${format === 'csv' ? 'csv' : 'xls'}`)
-    ElMessage.success(t('qa.exportedRows', { n: r.rowCount }))
+    if (saved.canceled || saved.ok === false) return
+    ElMessage.success(t('qa.exportedRows', { n: exportedRows }))
   } catch (e) {
     ElMessage.error(e?.message || t('qa.exportFailed'))
   } finally {
@@ -733,11 +735,8 @@ const exportViolationsFile = async (cmd) => {
   }
 }
 
-/** 通用文本下载（走统一的"用户选位置"） */
-const downloadText = (text, filename) => {
-  const blob = new Blob([text], { type: 'text/csv;charset=utf-8' })
-  saveBlobAs(blob, filename)
-}
+/** 通用文本下载：先选目录，再执行 generate 拿内容（后端报告可能要算几秒） */
+const downloadText = (filename, generate) => saveGenerated({ filename, generate })
 
 onMounted(() => { loadTypes(); loadConfigured(true) })
 

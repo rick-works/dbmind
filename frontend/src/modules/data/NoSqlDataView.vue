@@ -216,7 +216,7 @@
 
 <script setup>
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
-import { saveBlobAs } from '../../utils/useExportTask'
+import { saveGenerated } from '../../utils/useExportTask'
 import { ArrowUp, ArrowDown, Refresh, Download, Operation, Loading,
          Histogram, Calendar, Document, Tickets, Grid, Key } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
@@ -1694,15 +1694,21 @@ const openCellDetail = (row, col) => {
 }
 
 // ===== 导出当前页 CSV（本地生成）=====
-const exportCsv = () => {
+const exportCsv = async () => {
   const cols = visibleColumns.value
   if (!cols.length) return
-  const esc = (s) => /[",\n\r]/.test(s) ? `"${String(s).replace(/"/g, '""')}"` : s
-  const lines = [cols.map(esc).join(',')]
-  for (const r of displayRows.value) lines.push(cols.map(c => esc(plainVal(r[c]))).join(','))
-  const blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' })
   const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
-  saveBlobAs(blob, (props.collection === '*' ? (props.database || 'redis') : props.collection) + '-' + stamp + '.csv')
+  const filename = (props.collection === '*' ? (props.database || 'redis') : props.collection) + '-' + stamp + '.csv'
+  const saved = await saveGenerated({
+    filename,
+    generate: () => {
+      const esc = (s) => /[",\n\r]/.test(s) ? `"${String(s).replace(/"/g, '""')}"` : s
+      const lines = [cols.map(esc).join(',')]
+      for (const r of displayRows.value) lines.push(cols.map(c => esc(plainVal(r[c]))).join(','))
+      return new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' })
+    }
+  })
+  if (saved.canceled || saved.ok === false) return
   ElMessage.success(t('nsql.exportedCsv'))
 }
 

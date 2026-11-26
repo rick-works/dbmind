@@ -643,7 +643,7 @@ import TaskProgressDialog from '../../common/TaskProgressDialog.vue'
 import SqlProbeDialog from '../../common/SqlProbeDialog.vue'
 import CellDetailDialog from '../../common/CellDetailDialog.vue'
 import DataPivotDialog from './DataPivotDialog.vue'
-import { useExportTask, saveExportBlob } from '../../utils/useExportTask'
+import { useExportTask, saveExportBlob, pickExportTarget } from '../../utils/useExportTask'
 import { exportData } from '../../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { editorSettingsLive, getEditorSettings, getQuerySettings, querySettingsLive } from '../../utils/settings'
@@ -5585,12 +5585,15 @@ const onExport = async (cmd) => {
     page: Math.max(1, currentPage.value),
     size: Math.max(1, pageSize.value)
   }
+  const exportName = props.scriptName || t('sqlq.queryResult')
+  // 先选保存位置，再向后端要这一页的字节（用户手势内先弹另存为）
+  const target = await pickExportTarget(exportName, format)
+  if (target && target.canceled) return
+  if (target && target.failed) { ElMessage.error(t('mv.saveDialogFailed')); return }
   try {
     const blob = await exportData(connId, payload)
-    const saved = await saveExportBlob(blob, props.scriptName || t('sqlq.queryResult'), format)
-    if (saved.canceled) return
-    // 失败提示由 saveBlobAs 统一给过了，这里别再说「已保存」（用户最怕假成功）
-    if (saved.ok === false) return
+    const saved = await saveExportBlob(blob, exportName, format, target)
+    if (saved.canceled || saved.ok === false) return
     ElMessage.success(t('mv.exportSavedAs', { name: saved.name }))
   } catch (e) {
     ElMessage.error(t('mv.exportFailed', { detail: errMsg(e) }))

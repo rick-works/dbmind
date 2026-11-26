@@ -1,5 +1,5 @@
 import { t } from './i18n'
-import { saveBlobAs } from './useExportTask'
+import { saveGenerated } from './useExportTask'
 /**
  * 连接配置的导入 / 导出（JSON 文件）—— 「新建数据源」弹窗底部按钮与左侧树右键菜单共用这一份。
  *
@@ -73,8 +73,11 @@ export const CONN_FILE_EXT = 'dbm'
 // 另存为对话框里的类型名不走 i18n（系统对话框里出现中英混杂更怪），统一用产品名
 export const CONN_FILE_TYPES = [{ description: 'DBMind', accept: { 'application/json': ['.' + CONN_FILE_EXT] } }]
 
-/** 导出连接文件（走统一的"用户选位置"），返回 `{ ok } | { canceled }` 便于调用方决定要不要报成功 */
+/** 导出连接文件：先选目录再拼内容，返回 `{ ok } | { canceled }` 便于调用方决定要不要报成功 */
 export function downloadJson(filename, data) {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' })
-  return saveBlobAs(blob, filename, CONN_FILE_TYPES)
+  return saveGenerated({
+    filename,
+    types: CONN_FILE_TYPES,
+    generate: () => new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' })
+  })
 }

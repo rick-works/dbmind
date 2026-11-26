@@ -111,7 +111,7 @@
 
 <script setup>
 import { ref, computed, watch } from 'vue'
-import { saveBlobAs } from '../../utils/useExportTask'
+import { saveGenerated } from '../../utils/useExportTask'
 import { ElMessage } from 'element-plus'
 import { t } from '../../utils/i18n'
 import { Search, DocumentCopy, Download } from '@element-plus/icons-vue'
@@ -369,11 +369,11 @@ const copyCsv = async () => {
     ElMessage.success(t('pv.copied', { n: result.value.length }))
   } catch { ElMessage.error(t('pv.copyFailed')) }
 }
-const exportCsv = () => {
+const exportCsv = () => saveGenerated({
+  filename: `pivot-${Date.now()}.csv`,
   // 带 BOM：Excel 直接打开不乱码
-  const blob = new Blob(['\uFEFF' + csvLines()], { type: 'text/csv;charset=utf-8' })
-  saveBlobAs(blob, `pivot-${Date.now()}.csv`)
-}
+  generate: () => new Blob(['\uFEFF' + csvLines()], { type: 'text/csv;charset=utf-8' })
+})
 </script>
 
 <style scoped>

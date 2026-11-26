@@ -382,7 +382,7 @@ import { ArrowUp, ArrowDown, Delete, Plus, Minus, Check, Refresh, Download, Oper
 import { getTableData, listColumns, saveTableData, aiFilter, exportData } from '../../api'
 import TaskProgressDialog from '../../common/TaskProgressDialog.vue'
 import CellDetailDialog from '../../common/CellDetailDialog.vue'
-import { useExportTask, saveExportBlob } from '../../utils/useExportTask'
+import { useExportTask, saveExportBlob, pickExportTarget } from '../../utils/useExportTask'
 import { getQuerySettings } from '../../utils/settings'
 import { useShortcutScope } from '../../utils/useShortcuts'
 import { useExcelSelection } from '../../utils/excelSelection'
@@ -3339,12 +3339,14 @@ const doExport = async (cmd) => {
     page: Math.max(1, page.value),
     size: Math.max(1, size.value)
   }
+  // 先选保存位置，再向后端要这一页的字节（用户手势内先弹另存为）
+  const target = await pickExportTarget(props.table, format)
+  if (target && target.canceled) return
+  if (target && target.failed) { ElMessage.error(t('mv.saveDialogFailed')); return }
   try {
     const blob = await exportData(props.conn.id, payload)
-    const saved = await saveExportBlob(blob, props.table, format)
-    if (saved.canceled) return
-    // 失败提示由 saveBlobAs 统一给过了，这里别再说「已保存」（用户最怕假成功）
-    if (saved.ok === false) return
+    const saved = await saveExportBlob(blob, props.table, format, target)
+    if (saved.canceled || saved.ok === false) return
     ElMessage.success(t('mv.exportSavedAs', { name: saved.name }))
   } catch (e) {
     ElMessage.error(t('tdv.msgExportFailed') + (e?.message || e))

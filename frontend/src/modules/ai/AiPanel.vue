@@ -799,7 +799,7 @@
 
 <script setup>
 import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount, watch, defineAsyncComponent, toRef } from 'vue'
-import { saveBlobAs } from '../../utils/useExportTask'
+import { saveGenerated } from '../../utils/useExportTask'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ChatDotRound, DocumentCopy, Close, Cpu, Notebook, Download, Grid, Search, Star, Aim, DataAnalysis, Folder, Loading, ArrowDown, ArrowLeft, ArrowRight, Select, Coin, Connection, Promotion, Switch, Plus, Edit, Collection, Microphone, Bell, Tickets, List, Delete, MagicStick, View } from '@element-plus/icons-vue'
 import AiMark from '../../common/AiMark.vue'
@@ -3570,9 +3570,13 @@ const exportDoc = async (markdown, format, nameHint) => {
   try {
     const title = nameHint || currentSkill.value.label
     const base = [title, ctxDatabase.value || ctxConnName.value].filter(Boolean).join('_')
-    const blob = await aiExportDoc({ title, markdown, format, fileName: base })
-    const saved = await saveBlobAs(blob, base + '.' + format)
-    // 取消 / 保存失败都不该说「已导出」；失败提示由 saveBlobAs 统一给过。
+    const filename = base + '.' + format
+    // 先选目录再让后端转换（PDF 等慢转换也不会让用户等完才发现没选位置）
+    const saved = await saveGenerated({
+      filename,
+      generate: () => aiExportDoc({ title, markdown, format, fileName: base })
+    })
+    // 取消 / 保存失败都不该说「已导出」；失败提示由 saveGenerated 统一给过。
     // 注意以前 return 写在 try 里而重置写在 try 外，取消一次按钮就一直转圈
     if (saved.canceled || saved.ok === false) return
     ElMessage.success(t('ai.exportedFmt', { fmt: format.toUpperCase() }))

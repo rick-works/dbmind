@@ -930,7 +930,7 @@ pub fn export_dir() -> PathBuf {
     dir
 }
 
-/// 产物文件路径（`<home>/exports/<taskId>.<ext>`）。
+/// 产物文件路径（`<temp>/dbmind-exports/<taskId>.<ext>`）。
 pub fn artifact_path(task_id: &str, ext: &str) -> Result<PathBuf, String> {
     let dir = export_dir();
     dbmind_core::paths::ensure_dir(&dir).map_err(|e| format!("无法创建导出目录 {}：{e}", dir.display()))?;
