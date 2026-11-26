@@ -813,5 +813,13 @@
     "Enabled H2 user administration and DuckDB row editing; MongoDB and Redis read-only views are no longer shown as editable.",
     "The AI assistant session history now reloads automatically when you switch back to its tab; no manual refresh needed.",
     "Smart Ask is no longer duplicated as a built-in skill; it is provided solely by the installed ask plugin (Skills menu > Plugin skills) - click it to open Smart Ask."
+  ],
+  "v2.3.0": [
+    "Task Center now persists every detail locally - title, status, timing, logs and results survive port changes and restarts, up to 200 records.",
+    "Smart Ask chat history is stored in the database: 200 records with the latest 200 lines per turn, so switching ports or reinstalling no longer loses it.",
+    "Tasks that were never sent to the background now appear in Task Center too; finished jobs are no longer stranded in disk files nobody can see.",
+    "Every export now asks where to save before it starts: tree menu, data preview, SQL results, AI reports, charts and config packages - no more choosing the folder after the work is done.",
+    "Task progress dialogs show detailed logs by default, with no need to click Background first; the broken Download button and misleading temp paths are gone from completed exports.",
+    "The Settings cache page is no longer blank and now shows and clears real directories; the unused exports folder is no longer created."
   ]
 }
