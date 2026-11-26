@@ -49,7 +49,9 @@ jdbc:
     - org.slf4j:slf4j-api:1.7.36
 traits:
   singleDatabase: false
-  schemaAware: true
+  # 库即模式：ClickHouse 没有「库.模式」二级结构（真机 system.tables 只有 database+name）。
+  # 写 true 会让 MCP 的 split_scope 把带点库名（如 oishi_dw、字面带点库）拆坏。
+  schemaAware: false
 supportLevel: operate
 capabilities:
   queryExecution: true

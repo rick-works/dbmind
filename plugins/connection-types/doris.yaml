@@ -29,7 +29,9 @@ jdbc:
   artifact: com.mysql:mysql-connector-j:9.1.0
 traits:
   singleDatabase: false
-  schemaAware: true
+  # catalog→库→表 三层，没有「库.模式」二级结构（真机 information_schema.tables 的
+  # table_schema 就是裸库名）。写 true 会让 MCP 把 catalog.库 拆成库+模式而查不到表。
+  schemaAware: false
 supportLevel: operate
 capabilities:
   queryExecution: true

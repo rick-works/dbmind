@@ -26,7 +26,8 @@ jdbc:
   artifact: com.mysql:mysql-connector-j:9.1.0
 traits:
   singleDatabase: false
-  schemaAware: true
+  # information_schema.schemata 返回的名字就是库名（default/demo/...），没有库下二级模式层。
+  schemaAware: false
 # 2026-11-17 **真机验证**：实验机 lab-databend（MySQL 协议 3307 / HTTP 8000），
 # 连接、库表列、数据浏览、SQL、导出、建库建表全部通过。见 _uitest/audit_all.py databend。
 supportLevel: operate

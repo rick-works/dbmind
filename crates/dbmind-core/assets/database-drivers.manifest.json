@@ -681,7 +681,7 @@
       "skipTcpProbe": false,
       "supportLevel": "operate",
       "traits": {
-        "schemaAware": true,
+        "schemaAware": false,
         "singleDatabase": false
       },
       "typeCode": "CLICKHOUSE"
@@ -946,7 +946,7 @@
       "skipTcpProbe": false,
       "supportLevel": "operate",
       "traits": {
-        "schemaAware": true,
+        "schemaAware": false,
         "singleDatabase": false
       },
       "typeCode": "DORIS"
@@ -999,7 +999,7 @@
       "skipTcpProbe": false,
       "supportLevel": "operate",
       "traits": {
-        "schemaAware": true,
+        "schemaAware": false,
         "singleDatabase": false
       },
       "typeCode": "DATABEND"
@@ -1052,7 +1052,7 @@
       "skipTcpProbe": false,
       "supportLevel": "operate",
       "traits": {
-        "schemaAware": true,
+        "schemaAware": false,
         "singleDatabase": false
       },
       "typeCode": "SELECTDB"
