@@ -42,9 +42,9 @@ capabilities:
   objectBrowser: true
   objectSource: true
   schemaSearch: true
-  diagram: false
+  diagram: true
   tableDataEdit: false
-  tableStructureEdit: false
+  tableStructureEdit: true
   tableImport: false
   dataTransfer: true
   sqlFileExecution: true

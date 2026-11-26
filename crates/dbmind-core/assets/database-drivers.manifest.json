@@ -6,7 +6,7 @@
     {
       "agentKey": null,
       "capabilities": {
-        "dataTransfer": false,
+        "dataTransfer": true,
         "databaseCreate": true,
         "diagram": true,
         "driverManagement": false,
@@ -52,10 +52,10 @@
     {
       "agentKey": "duckdb",
       "capabilities": {
-        "dataTransfer": false,
+        "dataTransfer": true,
         "databaseCreate": true,
         "diagram": true,
-        "driverManagement": false,
+        "driverManagement": true,
         "fieldLineage": false,
         "metadataBrowse": true,
         "objectBrowser": true,
@@ -596,7 +596,7 @@
         "sqlFileExecution": true,
         "tableDataEdit": true,
         "tableImport": true,
-        "tableStructureEdit": false,
+        "tableStructureEdit": true,
         "userAdmin": true
       },
       "defaultPort": 1521,
@@ -637,7 +637,7 @@
       "capabilities": {
         "dataTransfer": true,
         "databaseCreate": true,
-        "diagram": false,
+        "diagram": true,
         "driverManagement": true,
         "fieldLineage": false,
         "metadataBrowse": true,
@@ -649,8 +649,8 @@
         "sqlFileExecution": true,
         "tableDataEdit": false,
         "tableImport": false,
-        "tableStructureEdit": false,
-        "userAdmin": false
+        "tableStructureEdit": true,
+        "userAdmin": true
       },
       "defaultPort": 8123,
       "dialect": "ClickHouse",
@@ -703,7 +703,7 @@
         "sqlFileExecution": true,
         "tableDataEdit": true,
         "tableImport": true,
-        "tableStructureEdit": false,
+        "tableStructureEdit": true,
         "userAdmin": true
       },
       "defaultPort": 50000,
@@ -809,7 +809,7 @@
         "sqlFileExecution": true,
         "tableDataEdit": true,
         "tableImport": true,
-        "tableStructureEdit": false,
+        "tableStructureEdit": true,
         "userAdmin": true
       },
       "defaultPort": 5236,
@@ -903,7 +903,7 @@
       "capabilities": {
         "dataTransfer": true,
         "databaseCreate": true,
-        "diagram": false,
+        "diagram": true,
         "driverManagement": true,
         "fieldLineage": false,
         "metadataBrowse": true,
@@ -913,10 +913,10 @@
         "schemaSearch": true,
         "sqlExplain": true,
         "sqlFileExecution": true,
-        "tableDataEdit": false,
+        "tableDataEdit": true,
         "tableImport": true,
-        "tableStructureEdit": false,
-        "userAdmin": false
+        "tableStructureEdit": true,
+        "userAdmin": true
       },
       "defaultPort": 9030,
       "dialect": "MySQL",
@@ -956,7 +956,7 @@
       "capabilities": {
         "dataTransfer": true,
         "databaseCreate": true,
-        "diagram": false,
+        "diagram": true,
         "driverManagement": true,
         "fieldLineage": false,
         "metadataBrowse": true,
@@ -1022,7 +1022,7 @@
         "tableDataEdit": true,
         "tableImport": true,
         "tableStructureEdit": true,
-        "userAdmin": false
+        "userAdmin": true
       },
       "defaultPort": 9030,
       "dialect": "MySQL",
@@ -1062,7 +1062,7 @@
       "capabilities": {
         "dataTransfer": true,
         "databaseCreate": true,
-        "diagram": false,
+        "diagram": true,
         "driverManagement": true,
         "fieldLineage": false,
         "metadataBrowse": true,
@@ -1074,7 +1074,7 @@
         "sqlFileExecution": true,
         "tableDataEdit": false,
         "tableImport": false,
-        "tableStructureEdit": false,
+        "tableStructureEdit": true,
         "userAdmin": false
       },
       "defaultPort": 4566,
@@ -1166,7 +1166,7 @@
     {
       "agentKey": "h2",
       "capabilities": {
-        "dataTransfer": false,
+        "dataTransfer": true,
         "databaseCreate": true,
         "diagram": true,
         "driverManagement": true,
@@ -1219,7 +1219,7 @@
     {
       "agentKey": "derby",
       "capabilities": {
-        "dataTransfer": false,
+        "dataTransfer": true,
         "databaseCreate": true,
         "diagram": true,
         "driverManagement": true,

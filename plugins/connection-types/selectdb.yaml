@@ -50,5 +50,5 @@ capabilities:
   databaseCreate: true
   fieldLineage: false
   sqlExplain: true
-  userAdmin: false
+  userAdmin: true
   driverManagement: true

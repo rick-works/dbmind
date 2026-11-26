@@ -36,14 +36,14 @@ capabilities:
   objectBrowser: true
   objectSource: true
   schemaSearch: true
-  diagram: false
-  tableDataEdit: false
-  tableStructureEdit: false
+  diagram: true
+  tableDataEdit: true
+  tableStructureEdit: true
   tableImport: true
   dataTransfer: true
   sqlFileExecution: true
   databaseCreate: true
   fieldLineage: false
   sqlExplain: true
-  userAdmin: false
+  userAdmin: true
   driverManagement: true

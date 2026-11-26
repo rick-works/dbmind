@@ -36,7 +36,7 @@ capabilities:
   objectBrowser: true
   objectSource: true
   schemaSearch: true
-  diagram: false
+  diagram: true
   # 2026-11-17 真机验证：insert / update / delete / 建表 / 加列 / 改列类型(MODIFY COLUMN) /
   # 改列名(RENAME COLUMN) / 表与列注释 全部通过 ⇒ DML 与结构编辑都打开。
   tableDataEdit: true

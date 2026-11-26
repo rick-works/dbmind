@@ -31,7 +31,7 @@ capabilities:
   schemaSearch: true
   diagram: true
   tableDataEdit: true
-  tableStructureEdit: false
+  tableStructureEdit: true
   tableImport: true
   dataTransfer: true
   sqlFileExecution: true
