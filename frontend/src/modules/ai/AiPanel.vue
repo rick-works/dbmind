@@ -3747,12 +3747,16 @@ const fitComposerBar = () => {
   const fits = (lv) => { applyComposerLv(lv); return !composerOverflow() }
   applyComposerLv(0)
   if (fits(0)) return
+  // 二分找「最小的能放下的级别」。fits(lv)=true 表示收起 <=lv 后不再溢出，
+  // 所以 mid 本身是可行解 → hi=mid（不是 mid-1）；false 表示 mid 还不够 → lo=mid+1
+  // （不是 lo=mid）。原来边界各偏一格，收敛到「还溢出」的级别，最右的发送组
+  // 被挤出滚动区且滚动条隐藏 —— 表现为小屏/mac 看不到发送按钮。
   let lo = 0
   let hi = COMPOSER_MAX_G
   while (lo < hi) {
     const mid = Math.ceil((lo + hi) / 2)
-    if (fits(mid)) hi = mid - 1
-    else lo = mid
+    if (fits(mid)) hi = mid
+    else lo = mid + 1
   }
   applyComposerLv(lo)
 }
@@ -4461,8 +4465,18 @@ watch([currentModelLabel, kbScopeLabel, () => ctxTables.value.length, () => loca
   display: inline-block; width: 10px; height: 10px;
   border-radius: 2px; background: #fff;
 }
-/* 右侧操作组：语音输入 + 发送整体靠右（margin-left:auto 收拢在一处） */
-.composer-right { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; }
+/* 右侧操作组：语音输入 + 发送整体靠右。
+   position:sticky + right:0 —— 极窄面板下左侧 chips 即使全收成图标仍溢出时，
+   overflow-x:auto 会把发送组滚出可视区（滚动条又是隐藏的），用户就看不到发送键了。
+   sticky 让它永远贴在滚动容器右缘；背景必须是 composer-box 的底色，
+   否则横向滚动时下面的 chip 会从它底下透出来。 */
+.composer-right {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0;
+  position: sticky; right: 0; z-index: 2;
+  background: var(--dc-bg-input);
+  padding-left: 8px;
+  border-radius: 8px;
+}
 .composer-right .composer-run { margin-left: 0; }
 /* 语音输入按钮：与发送按钮同规格的圆角图标钮；识别中红色 + 呼吸光圈提示 */
 .voice-btn {
