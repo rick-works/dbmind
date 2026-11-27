@@ -831,5 +831,8 @@
     "Fixed the window frame: Windows 11 is no longer misdetected as a legacy system, so the native rounded corners and 1px border are back.",
     "On Windows Server 2012 / Win8, the bright blue frame is replaced by a transparent window with a CSS rounded border, much closer to the modern Windows look.",
     "The AI assistant panel no longer pushes its send/stop buttons off-screen on narrow displays or macOS."
+  ],
+  "v2.3.3": [
+    "Fixed a freeze when opening the AI assistant in a narrow window: an incorrect binary-search bound in the composer toolbar locked up the main thread. The send/stop buttons now stay visible and usable."
   ]
 }

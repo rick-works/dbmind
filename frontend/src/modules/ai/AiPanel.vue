@@ -3751,10 +3751,15 @@ const fitComposerBar = () => {
   // 所以 mid 本身是可行解 → hi=mid（不是 mid-1）；false 表示 mid 还不够 → lo=mid+1
   // （不是 lo=mid）。原来边界各偏一格，收敛到「还溢出」的级别，最右的发送组
   // 被挤出滚动区且滚动条隐藏 —— 表现为小屏/mac 看不到发送按钮。
+  // **这里必须 floor**：ceil 在 lo=hi-1 时会算出 mid=hi，若该级仍可行，hi=mid 不变、
+  // lo 也不变，while 永远出不去 —— 窄窗口一打开 AI 面板就整页卡死（真机复现）。
+  // 顶栏 fitTopNav 用的是 hi=mid-1 / lo=mid，那边才必须用 ceil，两处别互相「统一」。
   let lo = 0
   let hi = COMPOSER_MAX_G
-  while (lo < hi) {
-    const mid = Math.ceil((lo + hi) / 2)
+  // 硬上限兜底：这段跑在主线程，边界再写错也只准少收一级，不能把整个窗口锁死。
+  let guard = COMPOSER_MAX_G + 1
+  while (lo < hi && guard-- > 0) {
+    const mid = Math.floor((lo + hi) / 2)
     if (fits(mid)) hi = mid
     else lo = mid + 1
   }
