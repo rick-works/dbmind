@@ -14,7 +14,7 @@ import urllib.request
 
 API = "https://gitee.com/api/v5/repos/rick-works/dbmind"
 # 保留最新版 + 上一版（够腾出配额即可，别把能下的历史版本都清了）
-KEEP = {"v2.3.2", "v2.3.1"}
+KEEP = {"v2.3.3", "v2.3.2"}
 APPLY = "--apply" in sys.argv
 
 tok = open(os.path.expanduser("~/.dbmind/gitee-token"), encoding="utf-8").read().strip()
