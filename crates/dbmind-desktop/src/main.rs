@@ -684,13 +684,7 @@ fn main() {
                 .title_bar_style(tauri::TitleBarStyle::Overlay)
                 .hidden_title(true);
             #[cfg(not(target_os = "macos"))]
-            let builder = builder
-                .decorations(false)
-                // 所有桌面壳（Windows / Linux）统一注入标记，由前端 CSS 画 1px 暗色框线。
-                // 以前这条线完全依赖 tao「无边框 + 阴影」模拟留下的原生非客户区、
-                // 由 DWM 画成暗线 —— 那套副作用在部分环境下不产生可见线，窗口就彻底没框了。
-                // 现在由应用自己画，不再赌系统行为；mac 走系统标题栏 + Overlay，不需要。
-                .initialization_script("window.__DBMIND_DESKTOP_FRAME__ = true;");
+            let builder = builder.decorations(false);
             // Windows 老系统（Server 2012 R2 / Win8）：去掉四周那圈亮蓝色系统边框。
             // 根因不是前端样式，而是 tao 的「无边框 + 阴影」模拟：为了保留 DWM 阴影，
             // 它给窗口留了原生 WS_THICKFRAME / WS_BORDER 的非客户区（左右下各一圈），
@@ -699,10 +693,14 @@ fn main() {
             // shadow(false) 让 tao 不再走这套模拟，窗口成为真正的无边框窗口；
             // 拖边缘缩放不受影响：tao 自己用 WM_NCHITTEST 实现，不依赖这些样式。
             // 代价是没有阴影（老系统那圈本来也不是阴影，是实打实的边框）。
+            // ⚠️ 只有老系统才补 CSS 线：新系统**必须**保留 tao/DWM 的默认模拟，
+            // 那条 1px 暗线由系统原生画（用户本机一直是这样，原生观感最好）。
+            // 上次把所有平台都改成 CSS 画，反而把本机的原生线盖掉了 —— 别再翻回去。
             #[cfg(windows)]
             let builder = if is_legacy_windows() {
                 append_shell_log("老系统 → 关闭无边框阴影模拟（去掉四周蓝色系统边框）");
-                builder.shadow(false)
+                builder.initialization_script("window.__DBMIND_LEGACY_FRAME__ = true;")
+                       .shadow(false)
             } else {
                 builder
             };

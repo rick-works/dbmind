@@ -130,12 +130,13 @@ for (const store of [window.localStorage, window.sessionStorage]) {
   } catch (e) { /* 同上 */ }
 }
 
-// 桌面壳（非 macOS）统一注入标记，由全局样式给窗口四周画一条 1px 暗色细线。
-// 以前这条线完全依赖 tao「无边框 + 阴影」模拟留下的原生非客户区由 DWM 画出来，
-// 那套副作用一失效窗口就彻底没框了；现在应用自己画，观感与 DBX 一致。
-// Server 2012 仍由壳关掉阴影模拟以去掉亮蓝粗框（见 main.rs），CSS 细线照常补上。
+// 只有 Windows 老系统（Server 2012 R2 / Win8）才用 CSS 补窗口框线：
+// 壳在这些系统上关掉了 tao 的「无边框 + 阴影」模拟以去掉亮蓝粗框，窗口成为
+// 真正无边框、四周连 1px 线都没有（见 main.rs 的 __DBMIND_LEGACY_FRAME__）。
+// 新系统（Win10/11）**不要**打这个标记 —— 那条 1px 暗线由 DWM 原生画出，
+// 用 CSS 再画一条会盖掉原生线、观感反而变了（用户实测「改完就不对了」）。
 // 浏览器版没有这个全局变量，观感不受影响。
-if (window.__DBMIND_DESKTOP_FRAME__ || window.__DBMIND_LEGACY_FRAME__) {
+if (window.__DBMIND_LEGACY_FRAME__) {
   document.body.classList.add('dc-desktop-frame')
 }
 

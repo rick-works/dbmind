@@ -276,11 +276,11 @@ html[data-theme="dark"] {
 
 html, body, #app { height: 100%; width: 100%; overflow: hidden; }
 
-/* 桌面壳统一框线：以前只给 Server 2012 补线（它关掉了阴影模拟、系统线没了），
-   其它 Windows 全靠 tao/DWM 的副作用画那条 1px 暗线 —— 那套副作用失效时窗口
-   四周就彻底没线（用户实测）。现在所有非 mac 桌面壳都由 main.js 打标记，
-   这里统一补一条与 DBX 同款的 1px 暗线；Server 2012 仍是同一条线，不会再出现
-   亮蓝粗框（那圈蓝框已由 main.rs 的 shadow(false) 去掉）。
+/* Windows 老系统（Server 2012 R2 / Win8）的窗口框线：
+   这些系统上壳关掉了 tao/DWM 的「无边框 + 阴影」模拟以去掉那圈亮蓝粗框，
+   窗口成了真正无边框、四周连 1px 线都没有，这里补一条暗线。
+   ⚠️ 新系统（Win10/11）不加 dc-desktop-frame class —— 那条线由 DWM 原生画，
+   再用 CSS 画会盖掉原生线、观感变了（用户实测「本机本来是好的，改完就不对了」）。
 
    必须用 fixed 伪元素画在**最上层**：原来写在 #app 上的 inset box-shadow
    绘制在 #app 背景之上、但**子元素之下**，而顶栏 / 侧栏 / 内容区都是不透明
