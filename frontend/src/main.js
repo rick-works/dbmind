@@ -130,16 +130,6 @@ for (const store of [window.localStorage, window.sessionStorage]) {
   } catch (e) { /* 同上 */ }
 }
 
-// 只有 Windows 老系统（Server 2012 R2 / Win8）才用 CSS 补窗口框线：
-// 壳在这些系统上关掉了 tao 的「无边框 + 阴影」模拟以去掉亮蓝粗框，窗口成为
-// 真正无边框、四周连 1px 线都没有（见 main.rs 的 __DBMIND_LEGACY_FRAME__）。
-// 新系统（Win10/11）**不要**打这个标记 —— 那条 1px 暗线由 DWM 原生画出，
-// 用 CSS 再画一条会盖掉原生线、观感反而变了（用户实测「改完就不对了」）。
-// 浏览器版没有这个全局变量，观感不受影响。
-if (window.__DBMIND_LEGACY_FRAME__) {
-  document.body.classList.add('dc-desktop-frame')
-}
-
 const app = createApp(App)
 for (const comp of [
   ElAlert, ElAutocomplete, ElButton, ElButtonGroup, ElCheckbox, ElCheckboxGroup, ElDatePicker, ElDialog, ElDivider, ElDrawer,
