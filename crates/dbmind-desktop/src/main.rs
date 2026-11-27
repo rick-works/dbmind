@@ -560,7 +560,7 @@ fn ensure_webview_data_dir() {
 }
 
 /// 是否老系统（Windows Server 2012 R2 / Win8 及更早，内部版本 < 10240）。
-/// 只用于 WebView2 的 GPU 合成开关 —— 窗口边框从 v2.2.1 起所有平台统一走原生，不再分流。
+/// 两处用：WebView2 的 GPU 合成开关、窗口边框的 `shadow(false)` + CSS 补线分流。
 #[cfg(windows)]
 fn is_legacy_windows() -> bool {
     use windows_sys::Win32::System::SystemInformation::GetVersion;
@@ -685,9 +685,20 @@ fn main() {
                 .hidden_title(true);
             #[cfg(not(target_os = "macos"))]
             let builder = builder.decorations(false);
-            // 边框按 v2.2.1 的原样：所有平台统一 decorations(false) + tao 默认阴影模拟，
-            // 那条 1px 边框由 DWM 原生画（用户实测 2.2.1 的观感是对的）。
-            // 不要再加 shadow(false) / CSS 补线 / 平台分流 —— 之前这几版都把边框改坏了。
+            // 边框：新系统（Win10/11）保持 v2.2.1 的原生实现 —— tao 的「无边框+阴影」模拟
+            // 让 DWM 画那条 1px 深灰细边，用户实测 2.2.1 观感正确，**本机绝不能被 CSS 覆盖**。
+            //
+            // 只有 Server 2012 / Win8 走例外：那套模拟在老系统 DWM 上画成亮蓝粗框，
+            // 用 shadow(false) 让 tao 退回真正无边框（去掉蓝框），再注入标记给前端补一条 CSS 线，
+            // 颜色按实测的新系统原生边框取（见 index.css 的 --dc-shell-frame）。
+            #[cfg(windows)]
+            let builder = if is_legacy_windows() {
+                append_shell_log("老系统 → 关闭无边框阴影模拟（去掉四周蓝色系统边框），改用 CSS 补线");
+                builder.initialization_script("window.__DBMIND_LEGACY_FRAME__ = true;")
+                       .shadow(false)
+            } else {
+                builder
+            };
             // 关掉 Tauri 的原生拖放接管（wry/WebView2 默认开启，为它自己的文件拖放事件服务）：
             // 接管期间**页面收不到任何 HTML5 拖拽事件** —— 树里拖表名进 SQL 编辑器在浏览器里
             // 好好的、安装版里一动不动，根因就是它（2026-11-05 实测）。前端与 Rust 都没有

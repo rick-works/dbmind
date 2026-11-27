@@ -87,6 +87,11 @@
   --dc-border: #333745;
   --dc-border-soft: #2a2e3a;
   --dc-border-strong: #3a3f4f;
+  /* 老系统（Server 2012/Win8）CSS 补的窗口外框线色。
+     按实测的 Win10/11 原生边框取色：顶边 rgb(43,44,49)=#2b2c31、左边 rgb(30,30,45)=#1e1e2d，
+     取两者之间偏暗的 #24252f —— 深色主题下和 v2.2.1 那条 DWM 原生细边几乎一致。
+     不用 --dc-border：那是控件描边（偏蓝 #333745），画在最外圈会带蓝调、对不上。 */
+  --dc-shell-frame: #24252f;
   --dc-border-hover: #414857;
 
   /* ---- 文本 ---- */
@@ -194,6 +199,8 @@ html[data-theme="light"] {
   --dc-border: #dde3ec;
   --dc-border-soft: #e7ecf3;
   --dc-border-strong: #c6d0dd;
+  /* 浅色主题下老系统的窗口外框线：实测 Win10/11 浅色原生边框约 #bcbec4 的灰。 */
+  --dc-shell-frame: #bcbec4;
   --dc-border-hover: #9fb0c5;
 
   /* ---- 文本 ---- */
@@ -275,6 +282,25 @@ html[data-theme="dark"] {
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 html, body, #app { height: 100%; width: 100%; overflow: hidden; }
+
+/* 老系统（Server 2012 R2 / Win8）的窗口框线：
+   壳在这些系统上用 shadow(false) 去掉了亮蓝粗框，窗口成了真正无边框，
+   这里补一条 CSS 暗线，颜色按实测的 Win10/11 原生边框取（见 --dc-shell-frame）。
+   ⚠️ 新系统（Win10/11）不加 dc-desktop-frame class —— 那条线由 DWM 原生画（v2.2.1 观感正确），
+   再用 CSS 画会盖掉原生线（用户实测「改完就不对了」）。
+
+   必须用 fixed 伪元素画在最上层：写在 #app 上的 inset box-shadow 会被顶栏/侧栏/内容区
+   这些不透明子元素整圈盖住，表现为「整个软件没有边框线」。
+   fixed + pointer-events:none：不占布局、贴着窗口四边、不挡任何点击。 */
+body.dc-desktop-frame::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  border: 1px solid var(--dc-shell-frame);
+  box-sizing: border-box;
+  pointer-events: none;
+  z-index: 100000;
+}
 
 /* AI 面板的下拉（Skills / 上下文 / 模型 / 知识库）都是 teleport 到 body 的浮层，
    组件里的 scoped 样式**够不着**它们，所以这几条只能放全局。
