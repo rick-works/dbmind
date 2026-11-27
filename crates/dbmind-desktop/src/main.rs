@@ -560,14 +560,39 @@ fn ensure_webview_data_dir() {
 }
 
 /// 是否老系统（Windows Server 2012 R2 / Win8 及更早，内部版本 < 10240）。
-/// 两处用：WebView2 的 GPU 合成开关、窗口边框的 `shadow(false)` + CSS 补线分流。
+/// 只用于 WebView2 的 GPU 合成开关 —— 老系统 GPU 合成会卡死窗口。
+///
+/// ⚠️ 绝不能用 `GetVersion()` 判断（2026-11-27 踩过）：Windows 8.1 起，
+/// **没在 manifest 里声明支持新系统的程序**，`GetVersion` 会谎报成 6.2 / build 9200 ——
+/// 本机实际 build 26200（Win11 24H2），`GetVersion` 报 6.2 → 误判为老系统，
+/// 白白关掉 GPU 合成（窗口动画卡）。改读注册表 `CurrentBuild`，这是系统真实版本号、
+/// 不受兼容层影响：Server 2012 R2=9200、Win10=10240+、Win11=22000+（实测本机 26200）。
 #[cfg(windows)]
 fn is_legacy_windows() -> bool {
-    use windows_sys::Win32::System::SystemInformation::GetVersion;
-    // GetVersion 低位字节 = 主版本，高位字节 = 次版本；第三个字 = 内部版本号。
-    // Server 2012 R2 = 6.3.9600；Win10 起 = 10.0.10240+。
-    let ver = unsafe { GetVersion() };
-    (ver & 0xff) < 10 || ((ver >> 16) & 0xffff) < 10240
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_LOCAL_MACHINE, KEY_READ,
+    };
+    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+    let path: Vec<u16> = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\0"
+        .encode_utf16()
+        .collect();
+    let name: Vec<u16> = "CurrentBuild\0".encode_utf16().collect();
+    let mut key: HKEY = std::ptr::null_mut();
+    if unsafe { RegOpenKeyExW(HKEY_LOCAL_MACHINE, path.as_ptr(), 0, KEY_READ, &mut key) } != ERROR_SUCCESS {
+        return false;
+    }
+    // CurrentBuild 是 REG_SZ（如 "26200"），读成字节再解析
+    let mut buf = [0u8; 32];
+    let mut size = buf.len() as u32;
+    let ok = unsafe {
+        RegQueryValueExW(key, name.as_ptr(), std::ptr::null(), std::ptr::null_mut(), buf.as_mut_ptr(), &mut size)
+    } == ERROR_SUCCESS;
+    unsafe { RegCloseKey(key) };
+    if !ok {
+        return false;
+    }
+    let s = String::from_utf8_lossy(&buf[..size as usize]);
+    s.trim().parse::<u32>().map(|build| build < 10240).unwrap_or(false)
 }
 #[cfg(not(windows))]
 fn is_legacy_windows() -> bool {
@@ -685,20 +710,9 @@ fn main() {
                 .hidden_title(true);
             #[cfg(not(target_os = "macos"))]
             let builder = builder.decorations(false);
-            // 边框：新系统（Win10/11）保持 v2.2.1 的原生实现 —— tao 的「无边框+阴影」模拟
-            // 让 DWM 画那条 1px 深灰细边，用户实测 2.2.1 观感正确，**本机绝不能被 CSS 覆盖**。
-            //
-            // 只有 Server 2012 / Win8 走例外：那套模拟在老系统 DWM 上画成亮蓝粗框，
-            // 用 shadow(false) 让 tao 退回真正无边框（去掉蓝框），再注入标记给前端补一条 CSS 线，
-            // 颜色按实测的新系统原生边框取（见 index.css 的 --dc-shell-frame）。
-            #[cfg(windows)]
-            let builder = if is_legacy_windows() {
-                append_shell_log("老系统 → 关闭无边框阴影模拟（去掉四周蓝色系统边框），改用 CSS 补线");
-                builder.initialization_script("window.__DBMIND_LEGACY_FRAME__ = true;")
-                       .shadow(false)
-            } else {
-                builder
-            };
+            // 边框统一走 v2.2.1 的原生实现：tao 的「无边框+阴影」模拟既画出那条 1px 细边，
+            // 也保留了 Windows 的圆角。**绝不能用 shadow(false)**：去掉蓝框的同时圆角也没了，
+            // 补 CSS 线也仿不像原生（用户实测「边框不对、圆角也没了」）。
             // 关掉 Tauri 的原生拖放接管（wry/WebView2 默认开启，为它自己的文件拖放事件服务）：
             // 接管期间**页面收不到任何 HTML5 拖拽事件** —— 树里拖表名进 SQL 编辑器在浏览器里
             // 好好的、安装版里一动不动，根因就是它（2026-11-05 实测）。前端与 Rust 都没有
