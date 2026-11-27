@@ -826,5 +826,10 @@
     "Every export now asks where to save before it starts: tree menu, data preview, SQL results, AI reports, charts and config packages - no more choosing the folder after the work is done.",
     "Task progress dialogs show detailed logs by default, with no need to click Background first; the broken Download button and misleading temp paths are gone from completed exports.",
     "The Settings cache page is no longer blank and now shows and clears real directories; the unused exports folder is no longer created."
+  ],
+  "v2.3.2": [
+    "Fixed the window frame: Windows 11 is no longer misdetected as a legacy system, so the native rounded corners and 1px border are back.",
+    "On Windows Server 2012 / Win8, the bright blue frame is replaced by a transparent window with a CSS rounded border, much closer to the modern Windows look.",
+    "The AI assistant panel no longer pushes its send/stop buttons off-screen on narrow displays or macOS."
   ]
 }
