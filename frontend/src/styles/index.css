@@ -281,8 +281,20 @@ html, body, #app { height: 100%; width: 100%; overflow: hidden; }
    四周就彻底没线（用户实测）。现在所有非 mac 桌面壳都由 main.js 打标记，
    这里统一补一条与 DBX 同款的 1px 暗线；Server 2012 仍是同一条线，不会再出现
    亮蓝粗框（那圈蓝框已由 main.rs 的 shadow(false) 去掉）。
-   用 inset 阴影而不是 border：不占布局、不影响 100% 宽高，且不挡鼠标事件。 */
-body.dc-desktop-frame #app { box-shadow: inset 0 0 0 1px var(--dc-border); }
+
+   必须用 fixed 伪元素画在**最上层**：原来写在 #app 上的 inset box-shadow
+   绘制在 #app 背景之上、但**子元素之下**，而顶栏 / 侧栏 / 内容区都是不透明
+   背景铺满四边，把这条线整圈盖住 —— 表现为「整个软件没有边框线」（用户实测）。
+   fixed + pointer-events:none：不占布局、贴着窗口四边、不挡任何点击。 */
+body.dc-desktop-frame::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  border: 1px solid var(--dc-border);
+  box-sizing: border-box;
+  pointer-events: none;
+  z-index: 100000;
+}
 
 /* AI 面板的下拉（Skills / 上下文 / 模型 / 知识库）都是 teleport 到 body 的浮层，
    组件里的 scoped 样式**够不着**它们，所以这几条只能放全局。
