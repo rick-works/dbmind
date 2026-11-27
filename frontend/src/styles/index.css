@@ -87,6 +87,11 @@
   --dc-border: #333745;
   --dc-border-soft: #2a2e3a;
   --dc-border-strong: #3a3f4f;
+  /* Windows 老系统（Server 2012 / Win8）补的窗口外框线专用色。
+     不用 --dc-border：那是控件描边（偏蓝 #333745），画在窗口最外圈会带蓝调，
+     跟 Win11 原生那条中性 1px 暗线对不上。这里取半透明黑叠在应用底色上，
+     深色主题下约等于 #0d0e12 的极暗灰，观感贴近 DWM 画的原生线。 */
+  --dc-shell-frame: rgba(0, 0, 0, .55);
   --dc-border-hover: #414857;
 
   /* ---- 文本 ---- */
@@ -194,6 +199,8 @@ html[data-theme="light"] {
   --dc-border: #dde3ec;
   --dc-border-soft: #e7ecf3;
   --dc-border-strong: #c6d0dd;
+  /* 浅色主题下的窗口外框线：比控件描边更重的灰，贴近 Win11 浅色窗口那条细暗边。 */
+  --dc-shell-frame: rgba(0, 0, 0, .20);
   --dc-border-hover: #9fb0c5;
 
   /* ---- 文本 ---- */
@@ -282,6 +289,10 @@ html, body, #app { height: 100%; width: 100%; overflow: hidden; }
    ⚠️ 新系统（Win10/11）不加 dc-desktop-frame class —— 那条线由 DWM 原生画，
    再用 CSS 画会盖掉原生线、观感变了（用户实测「本机本来是好的，改完就不对了」）。
 
+   颜色用 --dc-shell-frame（中性半透明黑），**不用 --dc-border**：
+   后者是控件描边、偏蓝，画在最外圈会带蓝调，跟 Win11 原生那条中性 1px 暗线
+   对不上（用户实测「框线显示还是不对」，点名要和 Win11 尽量一致）。
+
    必须用 fixed 伪元素画在**最上层**：原来写在 #app 上的 inset box-shadow
    绘制在 #app 背景之上、但**子元素之下**，而顶栏 / 侧栏 / 内容区都是不透明
    背景铺满四边，把这条线整圈盖住 —— 表现为「整个软件没有边框线」（用户实测）。
@@ -290,7 +301,7 @@ body.dc-desktop-frame::after {
   content: '';
   position: fixed;
   inset: 0;
-  border: 1px solid var(--dc-border);
+  border: 1px solid var(--dc-shell-frame);
   box-sizing: border-box;
   pointer-events: none;
   z-index: 100000;
