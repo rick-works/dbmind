@@ -276,6 +276,34 @@ html[data-theme="dark"] {
 
 html, body, #app { height: 100%; width: 100%; overflow: hidden; }
 
+/* ===== 老系统（Server 2012 / Win8）窗口圆角边框 =====
+   壳在这些系统上 shadow(false) 去掉亮蓝粗框、transparent(true) 让 WebView 透明，
+   于是窗口是真正的无边框矩形、四角本来是内容底色（方的）。这里：
+   1) html/body 背景透明 + 圆角裁切 → 四角露出桌面，圆角就出来了；
+   2) #app 铺应用底色、也圆角 → 内容不会从角上漏出去；
+   3) fixed 伪元素沿圆角画一条 1px 边框 → 模拟 DWM 那条原生细边。
+   ⚠️ 新系统（Win10/11）壳不注入 __DBMIND_LEGACY_FRAME__，body 没有这个类，
+   全部走原生边框 + DWM 圆角（v2.2.1 观感），这段完全不生效。 */
+body.dc-desktop-frame {
+  background: transparent;
+  border-radius: 9px;
+}
+body.dc-desktop-frame #app {
+  background: var(--dc-bg);
+  border-radius: 9px;
+  overflow: hidden;
+}
+body.dc-desktop-frame::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  border: 1px solid var(--dc-border);
+  border-radius: 9px;
+  box-sizing: border-box;
+  pointer-events: none;
+  z-index: 100000;
+}
+
 /* AI 面板的下拉（Skills / 上下文 / 模型 / 知识库）都是 teleport 到 body 的浮层，
    组件里的 scoped 样式**够不着**它们，所以这几条只能放全局。
    上下文那一列带层级缩进、库名一长整块就很宽 —— 夹住宽度与高度：

@@ -560,7 +560,7 @@ fn ensure_webview_data_dir() {
 }
 
 /// 是否老系统（Windows Server 2012 R2 / Win8 及更早，内部版本 < 10240）。
-/// 只用于 WebView2 的 GPU 合成开关 —— 老系统 GPU 合成会卡死窗口。
+/// 两处用：WebView2 的 GPU 合成开关、窗口边框的 `shadow(false)` + 透明 + CSS 圆角分流。
 ///
 /// ⚠️ 绝不能用 `GetVersion()` 判断（2026-11-27 踩过）：Windows 8.1 起，
 /// **没在 manifest 里声明支持新系统的程序**，`GetVersion` 会谎报成 6.2 / build 9200 ——
@@ -710,9 +710,24 @@ fn main() {
                 .hidden_title(true);
             #[cfg(not(target_os = "macos"))]
             let builder = builder.decorations(false);
-            // 边框统一走 v2.2.1 的原生实现：tao 的「无边框+阴影」模拟既画出那条 1px 细边，
-            // 也保留了 Windows 的圆角。**绝不能用 shadow(false)**：去掉蓝框的同时圆角也没了，
-            // 补 CSS 线也仿不像原生（用户实测「边框不对、圆角也没了」）。
+            // 边框：新系统（Win10/11）保持 v2.2.1 原生实现 —— tao 的「无边框+阴影」模拟画出
+            // 1px 细边 + DWM 圆角，观感正确；本机绝不能被 CSS 覆盖。
+            //
+            // 老系统（Server 2012 / Win8）例外：tao 那套模拟在老 DWM 上画成亮蓝粗框。
+            // 这里 shadow(false) 去掉蓝框 + transparent(true) 让 WebView 背景透明，
+            // 再注入标记给前端用 CSS 画圆角边框（见 index.css 的 .dc-desktop-frame）。
+            // 代价：老系统没有系统阴影，CSS 圆角观感与原生有差距 —— 用户已知悉并接受。
+            // ⚠️ is_legacy_windows 已改用注册表 CurrentBuild 判据（GetVersion 会谎报），
+            // 本机 Win11 绝不会再误入这条分支。
+            #[cfg(windows)]
+            let builder = if is_legacy_windows() {
+                append_shell_log("老系统 → 关闭阴影模拟 + 透明窗口，改用 CSS 圆角边框");
+                builder.initialization_script("window.__DBMIND_LEGACY_FRAME__ = true;")
+                       .shadow(false)
+                       .transparent(true)
+            } else {
+                builder
+            };
             // 关掉 Tauri 的原生拖放接管（wry/WebView2 默认开启，为它自己的文件拖放事件服务）：
             // 接管期间**页面收不到任何 HTML5 拖拽事件** —— 树里拖表名进 SQL 编辑器在浏览器里
             // 好好的、安装版里一动不动，根因就是它（2026-11-05 实测）。前端与 Rust 都没有
